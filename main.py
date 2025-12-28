@@ -46,8 +46,8 @@ USER_ROLES_FILE = 'data/user_roles.json'
 # Asset paths
 PFP_CONFIG_PATH = "config/pfp_config.json"
 BASE_START_IMAGE = "assets/base_start.png"
-P2P_FINAL_IMAGE = "assets/p2p_final.png"
-OTC_FINAL_IMAGE = "assets/otc_final.png"
+P2P_FINAL_IMAGE = "assets/p2p_logo_template.png"
+OTC_FINAL_IMAGE = "assets/otc_logo_template.png"
 
 def load_groups():
     """Load active groups data"""
