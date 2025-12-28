@@ -49,6 +49,7 @@ OTC_FINAL_IMAGE = "assets/otc_final.png"
 P2P_FINAL_IMAGE = "assets/p2p_logo_template.png"
 OTC_FINAL_IMAGE = "assets/otc_logo_template.png"
 UNKNOWN_PFP = "assets/unknown.png"
+PFP_CONFIG_PATH = "config/pfp_config.json"
 
 def load_groups():
     """Load active groups data"""
