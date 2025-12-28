@@ -28,7 +28,8 @@ from handlers.help import handle_help
 from utils.texts import (
     START_MESSAGE, CREATE_MESSAGE, P2P_CREATED_MESSAGE, OTHER_CREATED_MESSAGE,
     WELCOME_MESSAGE, SESSION_INITIATED_MESSAGE, INSUFFICIENT_MEMBERS_MESSAGE,
-    SESSION_ALREADY_INITIATED_MESSAGE, GROUP_NOT_FOUND_MESSAGE
+    SESSION_ALREADY_INITIATED_MESSAGE, GROUP_NOT_FOUND_MESSAGE,
+    MERGED_PHOTO_CAPTION, FINAL_PHOTO_CAPTION, PARTICIPANTS_CONFIRMED_MESSAGE
 )
 from utils.buttons import get_main_menu_buttons, get_session_buttons
 
@@ -293,6 +294,109 @@ async def create_merged_photo(client, buyer_id, seller_id):
         traceback.print_exc()
         return False, None, f"❌ Error creating merged photo: {e}"
 
+async def create_final_merged_photo(client, buyer_id, seller_id, base_image_path, group_type, buyer_name, seller_name):
+    """Create final merged photo with custom base image and text"""
+    try:
+        # Load config
+        if os.path.exists(PFP_CONFIG_PATH):
+            with open(PFP_CONFIG_PATH, 'r') as f:
+                config = json.load(f)
+        else:
+            config = {
+                "BUYER_PFP": {"center_x": 470, "center_y": 384, "radius": 177},
+                "SELLER_PFP": {"center_x": 920, "center_y": 384, "radius": 177}
+            }
+        
+        # Check base image exists
+        if not os.path.exists(base_image_path):
+            print(f"[ERROR] Base image not found: {base_image_path}")
+            return False, None, "Base image not found"
+        
+        # Download profile pictures
+        buyer_pfp = await download_profile_picture(client, buyer_id)
+        seller_pfp = await download_profile_picture(client, seller_id)
+        
+        # Load base image
+        base_img = Image.open(base_image_path).convert('RGBA')
+        
+        # Get coordinates from config
+        buyer_config = config.get("BUYER_PFP", {})
+        seller_config = config.get("SELLER_PFP", {})
+        
+        buyer_x = buyer_config.get("center_x", 470)
+        buyer_y = buyer_config.get("center_y", 384)
+        buyer_radius = buyer_config.get("radius", 177)
+        
+        seller_x = seller_config.get("center_x", 920)
+        seller_y = seller_config.get("center_y", 384)
+        seller_radius = seller_config.get("radius", 177)
+        
+        # Resize profile pictures to match circle diameters
+        buyer_size = (buyer_radius * 2, buyer_radius * 2)
+        seller_size = (seller_radius * 2, seller_radius * 2)
+        
+        buyer_pfp = buyer_pfp.resize(buyer_size, Image.Resampling.LANCZOS)
+        seller_pfp = seller_pfp.resize(seller_size, Image.Resampling.LANCZOS)
+        
+        # Create circular masks
+        buyer_mask = create_circular_mask(buyer_size, buyer_radius)
+        seller_mask = create_circular_mask(seller_size, seller_radius)
+        
+        # Calculate positions (center to top-left)
+        buyer_pos = (buyer_x - buyer_radius, buyer_y - buyer_radius)
+        seller_pos = (seller_x - seller_radius, seller_y - seller_radius)
+        
+        # Paste buyer PFP
+        base_img.paste(buyer_pfp, buyer_pos, buyer_mask)
+        
+        # Paste seller PFP
+        base_img.paste(seller_pfp, seller_pos, seller_mask)
+        
+        # Add text labels if this is a final image
+        if "final" in base_image_path.lower() or base_image_path != BASE_START_IMAGE:
+            draw = ImageDraw.Draw(base_img)
+            
+            try:
+                font = ImageFont.truetype("arial.ttf", 36)
+            except:
+                font = ImageFont.load_default()
+            
+            # Add buyer label
+            buyer_label = f"BUYER: {buyer_name[:15]}"
+            draw.text((buyer_x, buyer_y + buyer_radius + 30), buyer_label, 
+                     fill=(255, 255, 255), font=font, anchor="mt")
+            
+            # Add seller label
+            seller_label = f"SELLER: {seller_name[:15]}"
+            draw.text((seller_x, seller_y + seller_radius + 30), seller_label, 
+                     fill=(255, 255, 255), font=font, anchor="mt")
+            
+            # Add group type at the bottom
+            type_label = f"{group_type} ESCROW"
+            try:
+                title_font = ImageFont.truetype("arial.ttf", 48)
+            except:
+                title_font = font
+            
+            # Get image dimensions
+            img_width, img_height = base_img.size
+            draw.text((img_width // 2, img_height - 50), type_label, 
+                     fill=(255, 215, 0), font=title_font, anchor="mb", 
+                     stroke_width=2, stroke_fill=(0, 0, 0))
+        
+        # Convert to bytes
+        img_bytes = BytesIO()
+        base_img.save(img_bytes, format='PNG')
+        img_bytes.seek(0)
+        
+        return True, img_bytes, "✅ Final merged photo created"
+        
+    except Exception as e:
+        print(f"[ERROR] Creating final merged photo: {e}")
+        import traceback
+        traceback.print_exc()
+        return False, None, f"❌ Error creating final merged photo: {e}"
+
 class EscrowBot:
     def __init__(self):
         self.client = TelegramClient('escrow_bot', API_ID, API_HASH)
@@ -476,14 +580,13 @@ class EscrowBot:
                     with open(temp_file, "wb") as f:
                         f.write(image_bytes.getvalue())
                     
-                    # Send photo with caption
-                   caption = MERGED_PHOTO_CAPTION.format(
-    user1_name=get_user_display(user1),
-    user2_name=get_user_display(user2)
-)
+                    # Use text from texts.py
+                    caption = MERGED_PHOTO_CAPTION.format(
+                        user1_name=get_user_display(user1),
+                        user2_name=get_user_display(user2)
+                    )
                     
                     # Get buttons for role selection
-                    from utils.buttons import get_session_buttons
                     buttons = get_session_buttons(group_key)
                     
                     # Send photo with buttons
@@ -504,6 +607,13 @@ class EscrowBot:
                     print(f"[PHOTO] Merged preview sent for {chat_title}")
                 else:
                     print(f"[ERROR] Failed to create merged photo: {message}")
+                    # Send text message instead
+                    await self.client.send_message(
+                        chat,
+                        f"❌ Failed to create preview photo. {message}\n\nPlease select your roles:",
+                        parse_mode='html',
+                        buttons=get_session_buttons(group_key)
+                    )
                 
                 # Update group
                 group_data["session_initiated"] = True
@@ -516,6 +626,10 @@ class EscrowBot:
                 
             except Exception as e:
                 print(f"[ERROR] /begin: {e}")
+                try:
+                    await event.reply(f"❌ Error: {str(e)[:100]}", parse_mode='html')
+                except:
+                    pass
                 
         except Exception as e:
             print(f"[ERROR] Handling /begin: {e}")
@@ -653,7 +767,6 @@ class EscrowBot:
             print(f"[PHOTO] Using final template: {final_base_image} for {group_type_display}")
             
             # Create final merged photo with the selected template
-            # We need to modify create_merged_photo to accept custom base image
             success, image_bytes, message = await create_final_merged_photo(
                 self.client,
                 buyer['user_id'],
@@ -675,10 +788,13 @@ class EscrowBot:
                     await set_group_photo(self.client, chat, temp_file)
                     
                     # Also send as a message for confirmation
+                    caption = FINAL_PHOTO_CAPTION.format(group_type_display=group_type_display)
                     await self.client.send_file(
                         chat,
                         temp_file,
-                        caption = FINAL_PHOTO_CAPTION.format(group_type_display=group_type_display)
+                        caption=caption,
+                        parse_mode='html'
+                    )
                     
                     # Clean up
                     try:
@@ -690,25 +806,25 @@ class EscrowBot:
                     
                 except Exception as e:
                     print(f"[ERROR] Could not update final group photo: {e}")
+                    # Try to send the image anyway
+                    try:
+                        await self.client.send_file(
+                            chat,
+                            temp_file,
+                            caption=f"✅ Final {group_type_display} photo generated (but couldn't update group photo)",
+                            parse_mode='html'
+                        )
+                    except:
+                        pass
             else:
                 print(f"[ERROR] Failed to create final photo: {message}")
             
             # Send final confirmation message
             message_text = PARTICIPANTS_CONFIRMED_MESSAGE.format(
-    group_type_display=group_type_display,
-    buyer_name=buyer['name'],
-    seller_name=seller['name']
-)
-
-<blockquote>
-<b>Type:</b> {group_type_display} Escrow
-<b>Buyer:</b> {buyer['name']}
-<b>Seller:</b> {seller['name']}
-</blockquote>
-
-<b>Status:</b> Group photo has been updated with {group_type_display} template.
-
-<b>Next Step:</b> Wallet setup will begin shortly."""
+                group_type_display=group_type_display,
+                buyer_name=buyer['name'],
+                seller_name=seller['name']
+            )
             
             await self.client.send_message(
                 chat,
@@ -720,6 +836,8 @@ class EscrowBot:
             
         except Exception as e:
             print(f"[ERROR] Updating final group photo: {e}")
+            import traceback
+            traceback.print_exc()
 
     async def run(self):
         """Run the bot"""
@@ -762,6 +880,8 @@ class EscrowBot:
             print("\n👋 Bot stopped")
         except Exception as e:
             print(f"\n❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             print("\n🔴 Shutdown complete")
     
@@ -772,6 +892,7 @@ class EscrowBot:
         # Create necessary directories
         os.makedirs('assets', exist_ok=True)
         os.makedirs('config', exist_ok=True)
+        os.makedirs('data', exist_ok=True)
         
         # Create default config if it doesn't exist
         if not os.path.exists(PFP_CONFIG_PATH):
@@ -803,6 +924,9 @@ class EscrowBot:
                     img = create_default_fallback()
                     img.save(UNKNOWN_PFP)
                     print(f"   Created {UNKNOWN_PFP}")
+                elif asset == BASE_START_IMAGE:
+                    print("   Creating base_start.png template...")
+                    self.create_base_template()
         
         # Optional assets
         optional_assets = [P2P_FINAL_IMAGE, OTC_FINAL_IMAGE]
@@ -813,118 +937,68 @@ class EscrowBot:
                 print(f"   Will use {BASE_START_IMAGE} as fallback")
         
         print("✅ Asset check complete\n")
-
-async def create_final_merged_photo(client, buyer_id, seller_id, base_image_path, group_type, buyer_name, seller_name):
-    """Create final merged photo with custom base image and text"""
-    try:
-        # Load config
-        if os.path.exists(PFP_CONFIG_PATH):
-            with open(PFP_CONFIG_PATH, 'r') as f:
-                config = json.load(f)
-        else:
-            config = {
-                "BUYER_PFP": {"center_x": 470, "center_y": 384, "radius": 177},
-                "SELLER_PFP": {"center_x": 920, "center_y": 384, "radius": 177}
-            }
-        
-        # Check base image exists
-        if not os.path.exists(base_image_path):
-            print(f"[ERROR] Base image not found: {base_image_path}")
-            return False, None, "Base image not found"
-        
-        # Download profile pictures
-        buyer_pfp = await download_profile_picture(client, buyer_id)
-        seller_pfp = await download_profile_picture(client, seller_id)
-        
-        # Load base image
-        base_img = Image.open(base_image_path).convert('RGBA')
-        
-        # Get coordinates from config
-        buyer_config = config.get("BUYER_PFP", {})
-        seller_config = config.get("SELLER_PFP", {})
-        
-        buyer_x = buyer_config.get("center_x", 470)
-        buyer_y = buyer_config.get("center_y", 384)
-        buyer_radius = buyer_config.get("radius", 177)
-        
-        seller_x = seller_config.get("center_x", 920)
-        seller_y = seller_config.get("center_y", 384)
-        seller_radius = seller_config.get("radius", 177)
-        
-        # Resize profile pictures to match circle diameters
-        buyer_size = (buyer_radius * 2, buyer_radius * 2)
-        seller_size = (seller_radius * 2, seller_radius * 2)
-        
-        buyer_pfp = buyer_pfp.resize(buyer_size, Image.Resampling.LANCZOS)
-        seller_pfp = seller_pfp.resize(seller_size, Image.Resampling.LANCZOS)
-        
-        # Create circular masks
-        buyer_mask = create_circular_mask(buyer_size, buyer_radius)
-        seller_mask = create_circular_mask(seller_size, seller_radius)
-        
-        # Calculate positions (center to top-left)
-        buyer_pos = (buyer_x - buyer_radius, buyer_y - buyer_radius)
-        seller_pos = (seller_x - seller_radius, seller_y - seller_radius)
-        
-        # Paste buyer PFP
-        base_img.paste(buyer_pfp, buyer_pos, buyer_mask)
-        
-        # Paste seller PFP
-        base_img.paste(seller_pfp, seller_pos, seller_mask)
-        
-        # Add text labels if this is a final image
-        if "final" in base_image_path.lower() or base_image_path != BASE_START_IMAGE:
+    
+    def create_base_template(self):
+        """Create a base template image with circles"""
+        try:
+            # Create a 1400x800 blue gradient base image
+            width, height = 1400, 800
+            base_img = Image.new('RGBA', (width, height), (0, 40, 85))
             draw = ImageDraw.Draw(base_img)
             
+            # Draw two circles where profile pictures will go
+            # Buyer circle (left)
+            buyer_x, buyer_y = 470, 384
+            buyer_radius = 177
+            draw.ellipse(
+                [(buyer_x - buyer_radius, buyer_y - buyer_radius),
+                 (buyer_x + buyer_radius, buyer_y + buyer_radius)],
+                outline=(255, 255, 255),
+                width=5
+            )
+            
+            # Seller circle (right)
+            seller_x, seller_y = 920, 384
+            seller_radius = 177
+            draw.ellipse(
+                [(seller_x - seller_radius, seller_y - seller_radius),
+                 (seller_x + seller_radius, seller_y + seller_radius)],
+                outline=(255, 255, 255),
+                width=5
+            )
+            
+            # Add title
             try:
-                font = ImageFont.truetype("arial.ttf", 36)
+                font = ImageFont.truetype("arial.ttf", 60)
             except:
                 font = ImageFont.load_default()
             
-            # Add buyer label
-            buyer_label = f"BUYER: {buyer_name[:15]}"
-            draw.text((buyer_x, buyer_y + buyer_radius + 30), buyer_label, 
-                     fill=(255, 255, 255), font=font, anchor="mt")
+            draw.text((width // 2, 150), "ESCROW SESSION", 
+                     fill=(255, 255, 255), font=font, anchor="mm")
             
-            # Add seller label
-            seller_label = f"SELLER: {seller_name[:15]}"
-            draw.text((seller_x, seller_y + seller_radius + 30), seller_label, 
-                     fill=(255, 255, 255), font=font, anchor="mt")
-            
-            # Add group type at the bottom
-            type_label = f"{group_type} ESCROW"
+            # Add labels
             try:
-                title_font = ImageFont.truetype("arial.ttf", 48)
+                label_font = ImageFont.truetype("arial.ttf", 40)
             except:
-                title_font = font
+                label_font = font
             
-            # Get image dimensions
-            img_width, img_height = base_img.size
-            draw.text((img_width // 2, img_height - 50), type_label, 
-                     fill=(255, 215, 0), font=title_font, anchor="mb", 
-                     stroke_width=2, stroke_fill=(0, 0, 0))
-        
-        # Convert to bytes
-        img_bytes = BytesIO()
-        base_img.save(img_bytes, format='PNG')
-        img_bytes.seek(0)
-        
-        return True, img_bytes, "✅ Final merged photo created"
-        
-    except Exception as e:
-        print(f"[ERROR] Creating final merged photo: {e}")
-        import traceback
-        traceback.print_exc()
-        return False, None, f"❌ Error creating final merged photo: {e}"
+            draw.text((buyer_x, buyer_y + buyer_radius + 50), "BUYER", 
+                     fill=(200, 200, 255), font=label_font, anchor="mt")
+            draw.text((seller_x, seller_y + seller_radius + 50), "SELLER", 
+                     fill=(255, 200, 200), font=label_font, anchor="mt")
+            
+            # Save it
+            base_img.save(BASE_START_IMAGE)
+            print(f"✅ Created base template at {BASE_START_IMAGE}")
+            
+        except Exception as e:
+            print(f"[ERROR] Creating base template: {e}")
 
 def main():
     """Main function"""
     bot = EscrowBot()
     
     try:
-        # Create data directory
-        os.makedirs('data', exist_ok=True)
-        
         # Run bot
         loop = asyncio.get_event_loop()
         loop.run_until_complete(bot.run())
