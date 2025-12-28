@@ -477,13 +477,10 @@ class EscrowBot:
                         f.write(image_bytes.getvalue())
                     
                     # Send photo with caption
-                    caption = f"""<b>🔄 Escrow Session Initiated</b>
-
-Participants detected:
-• {get_user_display(user1)}
-• {get_user_display(user2)}
-
-Please select your roles below:"""
+                   caption = MERGED_PHOTO_CAPTION.format(
+    user1_name=get_user_display(user1),
+    user2_name=get_user_display(user2)
+)
                     
                     # Get buttons for role selection
                     from utils.buttons import get_session_buttons
@@ -681,9 +678,7 @@ Please select your roles below:"""
                     await self.client.send_file(
                         chat,
                         temp_file,
-                        caption=f"✅ <b>{group_type_display} Escrow Session Finalized</b>\n\nGroup photo has been updated!",
-                        parse_mode='html'
-                    )
+                        caption = FINAL_PHOTO_CAPTION.format(group_type_display=group_type_display)
                     
                     # Clean up
                     try:
@@ -699,7 +694,11 @@ Please select your roles below:"""
                 print(f"[ERROR] Failed to create final photo: {message}")
             
             # Send final confirmation message
-            message_text = f"""<b>✅ Escrow Session Finalized</b>
+            message_text = PARTICIPANTS_CONFIRMED_MESSAGE.format(
+    group_type_display=group_type_display,
+    buyer_name=buyer['name'],
+    seller_name=seller['name']
+)
 
 <blockquote>
 <b>Type:</b> {group_type_display} Escrow
