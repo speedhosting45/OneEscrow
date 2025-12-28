@@ -43,12 +43,12 @@ logging.basicConfig(
 GROUPS_FILE = 'data/active_groups.json'
 USER_ROLES_FILE = 'data/user_roles.json'
 
-# Asset paths
-PFP_CONFIG_PATH = "config/pfp_config.json"
 BASE_START_IMAGE = "assets/base_start.png"
 P2P_FINAL_IMAGE = "assets/p2p_final.png"
 OTC_FINAL_IMAGE = "assets/otc_final.png"
-UNKNOWN_PFP = "assets/unknown.png"  # Fallback image
+P2P_FINAL_IMAGE = "assets/p2p_logo_template.png"
+OTC_FINAL_IMAGE = "assets/otc_logo_template.png"
+UNKNOWN_PFP = "assets/unknown.png"
 
 def load_groups():
     """Load active groups data"""
