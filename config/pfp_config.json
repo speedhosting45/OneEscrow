@@ -1,0 +1,12 @@
+{
+  "BUYER_PFP": {
+    "center_x": 470,
+    "center_y": 384,
+    "radius": 177
+  },
+  "SELLER_PFP": {
+    "center_x": 920,
+    "center_y": 384,
+    "radius": 177
+  }
+}

@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.env
+escrow_bot.session
+data/
+debug_*.png
+temp_*.png
