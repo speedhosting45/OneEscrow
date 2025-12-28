@@ -34,6 +34,7 @@ P2P_CREATED_MESSAGE = """
 
 Proceed to the group to configure participants and terms <a href="https://files.catbox.moe/ieiejo.png">.</a>
 """
+
 OTHER_CREATED_MESSAGE = """
 𝘊𝘶𝘴𝘵𝘰𝘮 𝘌𝘴𝘤𝘳𝘰𝘸 𝘌𝘴𝘵𝘢𝘣𝘭𝘪𝘴𝘩𝘦𝘥
 
@@ -47,6 +48,7 @@ OTHER_CREATED_MESSAGE = """
 
 Proceed to the group to define participants and contract terms <a href="https://files.catbox.moe/f6lzpr.png">.</a>
 """
+
 INSUFFICIENT_MEMBERS_MESSAGE = """
 𝘗𝘢𝘳𝘵𝘪𝘤𝘪𝘱𝘢𝘯𝘵 𝘙𝘦𝘲𝘶𝘪𝘳𝘦𝘮𝘦𝘯𝘵
 
@@ -54,9 +56,15 @@ INSUFFICIENT_MEMBERS_MESSAGE = """
 """
 
 WAITING_PARTICIPANTS_MESSAGE = """
+𝘗𝘢𝘳𝘵𝘪𝘤𝘪𝘱𝘢𝘯𝘵 𝘈𝘸𝘢𝘪𝘵𝘦𝘥
+
+<blockquote>Awaiting counterparty arrival to initiate configuration.</blockquote>
 """
 
 SESSION_ALREADY_INITIATED_MESSAGE = """
+𝘗𝘳𝘰𝘵𝘰𝘤𝘰𝘭 𝘈𝘭𝘳𝘦𝘢𝘥𝘺 𝘈𝘤𝘵𝘪𝘷𝘦
+
+<blockquote>Transaction configuration already in progress.</blockquote>
 """
 
 GROUP_NOT_FOUND_MESSAGE = """
@@ -211,4 +219,50 @@ HELP_MESSAGE = """
 6. Confirmation & Release – Buyer verifies, funds released
 
 <blockquote>For protocol clarification or dispute assistance, contact designated administrators.</blockquote>
+"""
+
+# NEW MESSAGES TO ADD:
+
+MERGED_PHOTO_CAPTION = """
+𝘚𝘦𝘴𝘴𝘪𝘰𝘯 𝘐𝘯𝘪𝘵𝘪𝘢𝘵𝘦𝘥
+
+<b>Participants:</b>
+• {user1_name}
+• {user2_name}
+
+<blockquote>Please select your roles to proceed with configuration.</blockquote>
+"""
+
+FINAL_PHOTO_CAPTION = """
+✅ <b>{group_type} Escrow Session Finalized</b>
+
+Group photo has been updated!
+"""
+
+PARTICIPANTS_CONFIRMED_MESSAGE = """
+✅ <b>Participants Confirmed</b>
+
+<blockquote>
+<b>Type:</b> {group_type_display} Escrow
+<b>Buyer:</b> {buyer_name}
+<b>Seller:</b> {seller_name}
+</blockquote>
+
+<b>Status:</b> Group photo has been updated with {group_type_display} template.
+
+<b>Next Step:</b> Wallet setup will begin shortly.
+"""
+
+ESCROW_FINALIZED_MESSAGE = """
+✅ <b>Escrow Session Finalized</b>
+
+<blockquote>
+<b>Type:</b> {group_type_display} Escrow
+<b>Buyer:</b> {buyer_name}
+<b>Seller:</b> {seller_name}
+</blockquote>
+
+<b>Status:</b> Group photo has been updated with {group_type_display} template.
+
+<b>Next Step:</b> Wallet setup will begin shortly.
 """
