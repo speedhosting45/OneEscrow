@@ -44,6 +44,7 @@ logging.basicConfig(
 GROUPS_FILE = 'data/active_groups.json'
 USER_ROLES_FILE = 'data/user_roles.json'
 
+# Asset paths
 BASE_START_IMAGE = "assets/base_start.png"
 P2P_FINAL_IMAGE = "assets/p2p_logo_template.png"
 OTC_FINAL_IMAGE = "assets/otc_logo_template.png"
@@ -294,7 +295,7 @@ async def create_merged_photo(client, buyer_id, seller_id):
         traceback.print_exc()
         return False, None, f"❌ Error creating merged photo: {e}"
 
-async def create_final_merged_photo(client, buyer_id, seller_id, base_image_path, group_type, buyer_name, seller_name):
+async def create_final_merged_photo(client, buyer_id, seller_id, base_image_path, buyer_name, seller_name):
     """Create final merged photo with custom base image and text"""
     try:
         # Load config
@@ -310,7 +311,10 @@ async def create_final_merged_photo(client, buyer_id, seller_id, base_image_path
         # Check base image exists
         if not os.path.exists(base_image_path):
             print(f"[ERROR] Base image not found: {base_image_path}")
-            return False, None, "Base image not found"
+            # Fallback to base start image
+            base_image_path = BASE_START_IMAGE
+            if not os.path.exists(base_image_path):
+                return False, None, "No base image found"
         
         # Download profile pictures
         buyer_pfp = await download_profile_picture(client, buyer_id)
@@ -353,36 +357,32 @@ async def create_final_merged_photo(client, buyer_id, seller_id, base_image_path
         base_img.paste(seller_pfp, seller_pos, seller_mask)
         
         # Add text labels if this is a final image
-        if "final" in base_image_path.lower() or base_image_path != BASE_START_IMAGE:
+        try:
+            # Create drawing context
             draw = ImageDraw.Draw(base_img)
             
+            # Try to load font
             try:
                 font = ImageFont.truetype("arial.ttf", 36)
             except:
+                # Fallback to default
                 font = ImageFont.load_default()
             
-            # Add buyer label
-            buyer_label = f"BUYER: {buyer_name[:15]}"
+            # Add buyer label (truncate if too long)
+            safe_buyer_name = str(buyer_name)[:15]
+            buyer_label = f"BUYER: {safe_buyer_name}"
             draw.text((buyer_x, buyer_y + buyer_radius + 30), buyer_label, 
                      fill=(255, 255, 255), font=font, anchor="mt")
             
-            # Add seller label
-            seller_label = f"SELLER: {seller_name[:15]}"
+            # Add seller label (truncate if too long)
+            safe_seller_name = str(seller_name)[:15]
+            seller_label = f"SELLER: {safe_seller_name}"
             draw.text((seller_x, seller_y + seller_radius + 30), seller_label, 
                      fill=(255, 255, 255), font=font, anchor="mt")
-            
-            # Add group type at the bottom
-            type_label = f"{group_type} ESCROW"
-            try:
-                title_font = ImageFont.truetype("arial.ttf", 48)
-            except:
-                title_font = font
-            
-            # Get image dimensions
-            img_width, img_height = base_img.size
-            draw.text((img_width // 2, img_height - 50), type_label, 
-                     fill=(255, 215, 0), font=title_font, anchor="mb", 
-                     stroke_width=2, stroke_fill=(0, 0, 0))
+                    
+        except Exception as text_error:
+            print(f"[WARNING] Could not add text labels: {text_error}")
+            # Continue without text if there's an error
         
         # Convert to bytes
         img_bytes = BytesIO()
@@ -758,21 +758,20 @@ class EscrowBot:
             group_type = group_data.get("type", "p2p")
             group_type_display = "P2P" if group_type == "p2p" else "OTC"
             
-            # Choose correct base image based on group type
+            # Choose correct template based on group type
             if group_type == "p2p":
-                final_base_image = P2P_FINAL_IMAGE if os.path.exists(P2P_FINAL_IMAGE) else BASE_START_IMAGE
+                template_path = P2P_FINAL_IMAGE
             else:
-                final_base_image = OTC_FINAL_IMAGE if os.path.exists(OTC_FINAL_IMAGE) else BASE_START_IMAGE
+                template_path = OTC_FINAL_IMAGE
             
-            print(f"[PHOTO] Using final template: {final_base_image} for {group_type_display}")
+            print(f"[PHOTO] Using final template: {template_path} for {group_type_display}")
             
             # Create final merged photo with the selected template
             success, image_bytes, message = await create_final_merged_photo(
                 self.client,
                 buyer['user_id'],
                 seller['user_id'],
-                final_base_image,
-                group_type_display,
+                template_path,
                 buyer['name'],
                 seller['name']
             )
@@ -928,13 +927,14 @@ class EscrowBot:
                     print("   Creating base_start.png template...")
                     self.create_base_template()
         
-        # Optional assets
-        optional_assets = [P2P_FINAL_IMAGE, OTC_FINAL_IMAGE]
+        # Check logo templates
+        if not os.path.exists(P2P_FINAL_IMAGE):
+            print(f"⚠️  P2P logo template missing: {P2P_FINAL_IMAGE}")
+            print("   Please add p2p_logo_template.png to assets folder")
         
-        for asset in optional_assets:
-            if not os.path.exists(asset):
-                print(f"⚠️  Optional asset missing: {asset}")
-                print(f"   Will use {BASE_START_IMAGE} as fallback")
+        if not os.path.exists(OTC_FINAL_IMAGE):
+            print(f"⚠️  OTC logo template missing: {OTC_FINAL_IMAGE}")
+            print("   Please add otc_logo_template.png to assets folder")
         
         print("✅ Asset check complete\n")
     
