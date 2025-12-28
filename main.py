@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Main entry point for the Escrow Bot - Fixed version
+Main entry point for the Escrow Bot - Simplified version
 """
 import asyncio
 import logging
@@ -11,6 +11,8 @@ import json
 import os
 import time
 import re
+from PIL import Image, ImageDraw, ImageFont
+from io import BytesIO
 
 # Import configuration
 from config import API_ID, API_HASH, BOT_TOKEN, BOT_USERNAME
@@ -44,6 +46,8 @@ USER_ROLES_FILE = 'data/user_roles.json'
 # Asset paths
 PFP_CONFIG_PATH = "config/pfp_config.json"
 BASE_START_IMAGE = "assets/base_start.png"
+P2P_FINAL_IMAGE = "assets/p2p_final.png"
+OTC_FINAL_IMAGE = "assets/otc_final.png"
 
 def load_groups():
     """Load active groups data"""
@@ -126,6 +130,181 @@ async def set_group_photo(client, chat, photo_path):
     except Exception as e:
         print(f"[ERROR] set_group_photo: {e}")
         raise e
+
+async def download_profile_picture(client, user_id):
+    """Download user's profile picture"""
+    try:
+        print(f"[PHOTO] Downloading profile picture for user_id: {user_id}")
+        
+        # Get user entity
+        user = await client.get_entity(user_id)
+        
+        # Download profile photo if exists
+        if hasattr(user, 'photo') and user.photo:
+            print(f"[PHOTO] User {user_id} has profile photo, downloading...")
+            try:
+                photo_bytes = await client.download_profile_photo(
+                    user,
+                    file=BytesIO(),
+                    download_big=True
+                )
+                
+                if photo_bytes:
+                    # Open the image
+                    image = Image.open(BytesIO(photo_bytes))
+                    
+                    # Convert to RGBA if needed
+                    if image.mode != 'RGBA':
+                        image = image.convert('RGBA')
+                    
+                    print(f"[PHOTO] Successfully downloaded profile picture for {user_id}")
+                    return image
+            except Exception as e:
+                print(f"[PHOTO] Error downloading profile photo for {user_id}: {e}")
+        
+        # If no profile photo or error, create a default one
+        print(f"[PHOTO] Creating default PFP for {user_id}")
+        return create_default_pfp(user_id)
+        
+    except Exception as e:
+        print(f"[ERROR] Downloading profile picture for {user_id}: {e}")
+        return create_default_pfp(user_id)
+
+def create_default_pfp(user_id):
+    """Create a default profile picture with initials"""
+    try:
+        # Create a 400x400 image
+        size = (400, 400)
+        
+        # Generate color from user ID
+        import hashlib
+        hash_obj = hashlib.md5(str(user_id).encode())
+        hex_dig = hash_obj.hexdigest()
+        color = tuple(int(hex_dig[i:i+2], 16) for i in (0, 2, 4))
+        
+        # Create image
+        image = Image.new('RGBA', size, (255, 255, 255, 0))
+        draw = ImageDraw.Draw(image)
+        
+        # Draw circle
+        center_x, center_y = size[0] // 2, size[1] // 2
+        radius = min(center_x, center_y) - 10
+        
+        draw.ellipse(
+            [(center_x - radius, center_y - radius),
+             (center_x + radius, center_y + radius)],
+            fill=color + (255,)
+        )
+        
+        # Add user ID initials (last 2 digits)
+        user_digits = user_id % 100
+        initials = f"U{user_digits:02d}"
+        
+        # Try to load font
+        try:
+            font_size = min(60, int(radius * 0.8))
+            font = ImageFont.truetype("arial.ttf", font_size)
+        except:
+            font = ImageFont.load_default()
+        
+        draw.text(
+            (center_x, center_y),
+            initials,
+            fill=(255, 255, 255, 255),
+            anchor="mm",
+            font=font
+        )
+        
+        return image
+        
+    except Exception as e:
+        print(f"[ERROR] Creating default PFP: {e}")
+        # Return a simple colored circle as last resort
+        image = Image.new('RGBA', (400, 400), (100, 100, 255, 255))
+        return image
+
+def create_circular_mask(size, radius):
+    """Create a circular mask"""
+    mask = Image.new('L', size, 0)
+    draw = ImageDraw.Draw(mask)
+    center_x, center_y = size[0] // 2, size[1] // 2
+    draw.ellipse(
+        [(center_x - radius, center_y - radius),
+         (center_x + radius, center_y + radius)],
+        fill=255
+    )
+    return mask
+
+async def create_merged_photo(client, buyer_id, seller_id):
+    """Create merged photo with both profile pictures"""
+    try:
+        # Load config
+        if os.path.exists(PFP_CONFIG_PATH):
+            with open(PFP_CONFIG_PATH, 'r') as f:
+                config = json.load(f)
+        else:
+            config = {
+                "BUYER_PFP": {"center_x": 470, "center_y": 384, "radius": 177},
+                "SELLER_PFP": {"center_x": 920, "center_y": 384, "radius": 177}
+            }
+        
+        # Check base image exists
+        if not os.path.exists(BASE_START_IMAGE):
+            print(f"[ERROR] Base image not found: {BASE_START_IMAGE}")
+            return False, None, "Base image not found"
+        
+        # Download profile pictures
+        buyer_pfp = await download_profile_picture(client, buyer_id)
+        seller_pfp = await download_profile_picture(client, seller_id)
+        
+        # Load base image
+        base_img = Image.open(BASE_START_IMAGE).convert('RGBA')
+        
+        # Get coordinates from config
+        buyer_config = config.get("BUYER_PFP", {})
+        seller_config = config.get("SELLER_PFP", {})
+        
+        buyer_x = buyer_config.get("center_x", 470)
+        buyer_y = buyer_config.get("center_y", 384)
+        buyer_radius = buyer_config.get("radius", 177)
+        
+        seller_x = seller_config.get("center_x", 920)
+        seller_y = seller_config.get("center_y", 384)
+        seller_radius = seller_config.get("radius", 177)
+        
+        # Resize profile pictures to match circle diameters
+        buyer_size = (buyer_radius * 2, buyer_radius * 2)
+        seller_size = (seller_radius * 2, seller_radius * 2)
+        
+        buyer_pfp = buyer_pfp.resize(buyer_size, Image.Resampling.LANCZOS)
+        seller_pfp = seller_pfp.resize(seller_size, Image.Resampling.LANCZOS)
+        
+        # Create circular masks
+        buyer_mask = create_circular_mask(buyer_size, buyer_radius)
+        seller_mask = create_circular_mask(seller_size, seller_radius)
+        
+        # Calculate positions (center to top-left)
+        buyer_pos = (buyer_x - buyer_radius, buyer_y - buyer_radius)
+        seller_pos = (seller_x - seller_radius, seller_y - seller_radius)
+        
+        # Paste buyer PFP
+        base_img.paste(buyer_pfp, buyer_pos, buyer_mask)
+        
+        # Paste seller PFP
+        base_img.paste(seller_pfp, seller_pos, seller_mask)
+        
+        # Convert to bytes
+        img_bytes = BytesIO()
+        base_img.save(img_bytes, format='PNG')
+        img_bytes.seek(0)
+        
+        return True, img_bytes, "✅ Merged photo created"
+        
+    except Exception as e:
+        print(f"[ERROR] Creating merged photo: {e}")
+        import traceback
+        traceback.print_exc()
+        return False, None, f"❌ Error creating merged photo: {e}"
 
 class EscrowBot:
     def __init__(self):
@@ -211,7 +390,7 @@ class EscrowBot:
                 pass
     
     async def handle_begin_command(self, event):
-        """Handle /begin command"""
+        """Handle /begin command - Create merged photo and show role buttons"""
         try:
             # Get chat and user
             chat = await event.get_chat()
@@ -294,39 +473,57 @@ class EscrowBot:
                 groups[group_key] = group_data
                 save_groups(groups)
                 
-                # Get user displays
-                user_displays = []
-                for user_obj in real_users[:2]:
-                    user_displays.append(get_user_display(user_obj))
+                # Get first 2 users for photo
+                user1, user2 = real_users[0], real_users[1]
                 
-                display_text = " • ".join(user_displays)
-                
-                # Send session message
-                message = SESSION_INITIATED_MESSAGE.format(
-                    participants_display=display_text
+                # Create merged photo with their profile pictures
+                success, image_bytes, message = await create_merged_photo(
+                    self.client, 
+                    user1.id, 
+                    user2.id
                 )
                 
-                # Get buttons from buttons.py
-                buttons = get_session_buttons(group_key)
-                
-                # Send message
-                sent_message = await self.client.send_message(
-                    chat,
-                    message,
-                    parse_mode='html',
-                    buttons=buttons
-                )
+                if success:
+                    # Send the merged photo as preview
+                    temp_file = "temp_merged_preview.png"
+                    with open(temp_file, "wb") as f:
+                        f.write(image_bytes.getvalue())
+                    
+                    # Send photo with caption
+                    caption = f"""<b>🔄 Escrow Session Initiated</b>
+
+Participants detected:
+• {get_user_display(user1)}
+• {get_user_display(user2)}
+
+Please select your roles below:"""
+                    
+                    # Get buttons for role selection
+                    from utils.buttons import get_session_buttons
+                    buttons = get_session_buttons(group_key)
+                    
+                    # Send photo with buttons
+                    await self.client.send_file(
+                        chat,
+                        temp_file,
+                        caption=caption,
+                        parse_mode='html',
+                        buttons=buttons
+                    )
+                    
+                    # Clean up temp file
+                    os.remove(temp_file)
+                    
+                    print(f"[PHOTO] Merged preview sent for {chat_title}")
                 
                 # Update group
                 group_data["session_initiated"] = True
-                group_data["session_message_id"] = sent_message.id
+                group_data["user1_id"] = user1.id
+                group_data["user2_id"] = user2.id
                 groups[group_key] = group_data
                 save_groups(groups)
                 
                 print(f"[SUCCESS] Session initiated in {chat_title}")
-                
-                # Create and send initial group photo with placeholder circles
-                await self.send_initial_group_photo(chat, real_users[:2])
                 
             except Exception as e:
                 print(f"[ERROR] /begin: {e}")
@@ -334,62 +531,8 @@ class EscrowBot:
         except Exception as e:
             print(f"[ERROR] Handling /begin: {e}")
     
-    async def send_initial_group_photo(self, chat, participants):
-        """Send initial group photo with both participants' profile pictures"""
-        try:
-            if len(participants) < 2:
-                return
-            
-            from utils.photo_merger import PhotoMerger
-            
-            # Create photo merger
-            merger = PhotoMerger(PFP_CONFIG_PATH, BASE_START_IMAGE)
-            
-            # Generate group photo
-            success, image_bytes, message = merger.generate_group_photo(
-                self.client,
-                participants[0].id,
-                participants[1].id
-            )
-            
-            if success:
-                try:
-                    # Save to temporary file
-                    temp_file = "temp_group_photo.png"
-                    with open(temp_file, "wb") as f:
-                        f.write(image_bytes.getvalue())
-                    
-                    # Update group photo
-                    await set_group_photo(self.client, chat, temp_file)
-                    
-                    # Also send as a message
-                    await self.client.send_file(
-                        chat,
-                        temp_file,
-                        caption=f"🔄 Group photo updated with participants' profile pictures",
-                        parse_mode='html'
-                    )
-                    
-                    # Clean up
-                    try:
-                        os.remove(temp_file)
-                    except:
-                        pass
-                    
-                    print(f"[PHOTO] Initial group photo sent and updated")
-                    
-                except Exception as e:
-                    print(f"[WARNING] Could not update group photo: {e}")
-                    # Save for debugging
-                    with open("debug_group_photo.png", "wb") as f:
-                        f.write(image_bytes.getvalue())
-                    print(f"[DEBUG] Photo saved as debug_group_photo.png")
-            
-        except Exception as e:
-            print(f"[ERROR] Sending initial group photo: {e}")
-    
     async def handle_role_selection(self, event):
-        """Handle role selection"""
+        """Handle role selection - Update with final P2P/OTC photo"""
         try:
             # Get user
             sender = await event.get_sender()
@@ -484,14 +627,14 @@ class EscrowBot:
             seller_count = sum(1 for u in roles[group_id].values() if u.get("role") == "seller")
             
             if buyer_count >= 1 and seller_count >= 1:
-                await self.send_wallet_setup(chat, group_id, roles[group_id])
+                await self.update_final_group_photo(chat, group_id, roles[group_id])
                 
         except Exception as e:
             print(f"[ERROR] Role selection: {e}")
             await event.answer("❌ Error selecting role", alert=True)
     
-    async def send_wallet_setup(self, chat, group_id, user_roles):
-        """Send wallet setup message with final group photo"""
+    async def update_final_group_photo(self, chat, group_id, user_roles):
+        """Update group photo with final P2P/OTC template - ONLY CALLED ONCE!"""
         try:
             # Find buyer and seller
             buyer = None
@@ -512,54 +655,33 @@ class EscrowBot:
             group_type = group_data.get("type", "p2p")
             group_type_display = "P2P" if group_type == "p2p" else "OTC"
             
-            # Create final group photo with buyer/seller info overlay
-            from utils.photo_merger import PhotoMerger
-            from PIL import Image, ImageDraw, ImageFont
-            from io import BytesIO
+            # Choose final template based on group type
+            if group_type == "p2p":
+                final_template = P2P_FINAL_IMAGE
+            else:
+                final_template = OTC_FINAL_IMAGE
             
-            try:
-                # Generate base photo with profile pictures
-                merger = PhotoMerger(PFP_CONFIG_PATH, BASE_START_IMAGE)
-                success, image_bytes, message = merger.generate_group_photo(
-                    self.client,
-                    buyer['user_id'],
-                    seller['user_id']
-                )
-                
-                if success:
-                    # Add text overlay for roles
-                    img = Image.open(BytesIO(image_bytes.getvalue()))
-                    draw = ImageDraw.Draw(img)
-                    
-                    try:
-                        # Try to load a nice font
-                        font = ImageFont.truetype("arial.ttf", 40)
-                    except:
-                        # Fallback to default
-                        font = ImageFont.load_default()
-                    
-                    # Add buyer text
-                    buyer_text = f"Buyer: {buyer['name']}"
-                    draw.text((470, 600), buyer_text, fill=(255, 255, 255), font=font, anchor="mm")
-                    
-                    # Add seller text
-                    seller_text = f"Seller: {seller['name']}"
-                    draw.text((920, 600), seller_text, fill=(255, 255, 255), font=font, anchor="mm")
-                    
-                    # Add escrow type
-                    escrow_text = f"{group_type_display} Escrow"
-                    draw.text((700, 700), escrow_text, fill=(255, 215, 0), font=font, anchor="mm", stroke_width=2, stroke_fill=(0, 0, 0))
-                    
-                    # Save updated image
-                    updated_bytes = BytesIO()
-                    img.save(updated_bytes, format='PNG')
-                    updated_bytes.seek(0)
-                    
-                    # Update group photo
-                    temp_file = "temp_final_photo.png"
+            # Check if final template exists
+            if not os.path.exists(final_template):
+                print(f"[ERROR] Final template not found: {final_template}")
+                # Use base start as fallback
+                final_template = BASE_START_IMAGE
+            
+            # Create final merged photo with the selected template
+            success, image_bytes, message = await create_merged_photo(
+                self.client,
+                buyer['user_id'],
+                seller['user_id']
+            )
+            
+            if success:
+                try:
+                    # Save to temporary file
+                    temp_file = f"temp_final_{group_type}.png"
                     with open(temp_file, "wb") as f:
-                        f.write(updated_bytes.getvalue())
+                        f.write(image_bytes.getvalue())
                     
+                    # UPDATE GROUP PHOTO (ONLY THIS ONE TIME!)
                     await set_group_photo(self.client, chat, temp_file)
                     
                     # Clean up
@@ -568,13 +690,13 @@ class EscrowBot:
                     except:
                         pass
                     
-                    print(f"[PHOTO] Final group photo updated with role information")
+                    print(f"[PHOTO] Final {group_type_display} group photo updated!")
                     
-            except Exception as e:
-                print(f"[WARNING] Could not update final group photo: {e}")
+                except Exception as e:
+                    print(f"[ERROR] Could not update final group photo: {e}")
             
-            # Send confirmation message
-            message_text = f"""<b>✅ Participants Confirmed</b>
+            # Send final confirmation message
+            message_text = f"""<b>✅ Escrow Session Finalized</b>
 
 <blockquote>
 <b>Type:</b> {group_type_display} Escrow
@@ -582,7 +704,7 @@ class EscrowBot:
 <b>Seller:</b> {seller['name']}
 </blockquote>
 
-<b>Status:</b> Custom group photo has been generated with both participants' profile pictures.
+<b>Status:</b> Group photo has been updated with {group_type_display} template.
 
 <b>Next Step:</b> Wallet setup will begin shortly."""
             
@@ -592,10 +714,10 @@ class EscrowBot:
                 parse_mode='html'
             )
             
-            print(f"[SETUP] {group_type_display} escrow ready: {buyer['name']} ↔ {seller['name']}")
+            print(f"[SETUP] {group_type_display} escrow finalized: {buyer['name']} ↔ {seller['name']}")
             
         except Exception as e:
-            print(f"[ERROR] Sending setup: {e}")
+            print(f"[ERROR] Updating final group photo: {e}")
 
     async def run(self):
         """Run the bot"""
@@ -624,10 +746,9 @@ class EscrowBot:
             
             print("\n🚀 FEATURES:")
             print("   • P2P & OTC Escrow Creation")
-            print("   • Profile picture-based group photos")
-            print("   • Automatic photo merging with config")
+            print("   • Automatic profile picture merging")
             print("   • Role selection system")
-            print("   • Custom logo generation")
+            print("   • Single group photo update on confirmation")
             print("\n📡 Bot is ready...")
             print("   Ctrl+C to stop\n")
             
@@ -668,9 +789,23 @@ class EscrowBot:
             print(f"✅ Created default config at {PFP_CONFIG_PATH}")
         
         # Check base image
+        assets_missing = []
         if not os.path.exists(BASE_START_IMAGE):
-            print(f"⚠️  WARNING: Base image not found at {BASE_START_IMAGE}")
-            print("   The bot will create a fallback image, but you should add your custom base image.")
+            assets_missing.append(f"Base template: {BASE_START_IMAGE}")
+        
+        if not os.path.exists(P2P_FINAL_IMAGE):
+            print(f"⚠️  P2P final template not found: {P2P_FINAL_IMAGE}")
+            print("   Will use base template as fallback for P2P groups")
+        
+        if not os.path.exists(OTC_FINAL_IMAGE):
+            print(f"⚠️  OTC final template not found: {OTC_FINAL_IMAGE}")
+            print("   Will use base template as fallback for OTC groups")
+        
+        if assets_missing:
+            print("⚠️  WARNING: Missing required assets:")
+            for asset in assets_missing:
+                print(f"   • {asset}")
+            print("\n   The bot will create fallback images.")
         
         print("✅ Asset check complete\n")
 
