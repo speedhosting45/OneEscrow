@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Main entry point for the Escrow Bot - Simplified version
+Main entry point for the Escrow Bot - Fixed version
 """
 import asyncio
 import logging
@@ -46,8 +46,9 @@ USER_ROLES_FILE = 'data/user_roles.json'
 # Asset paths
 PFP_CONFIG_PATH = "config/pfp_config.json"
 BASE_START_IMAGE = "assets/base_start.png"
-P2P_FINAL_IMAGE = "assets/p2p_logo_template.png"
-OTC_FINAL_IMAGE = "assets/otc_logo_template.png"
+P2P_FINAL_IMAGE = "assets/p2p_final.png"
+OTC_FINAL_IMAGE = "assets/otc_final.png"
+UNKNOWN_PFP = "assets/unknown.png"  # Fallback image
 
 def load_groups():
     """Load active groups data"""
@@ -132,85 +133,73 @@ async def set_group_photo(client, chat, photo_path):
         raise e
 
 async def download_profile_picture(client, user_id):
-    """Download user's profile picture"""
+    """Download user's profile picture - CORRECTED VERSION"""
     try:
         print(f"[PHOTO] Downloading profile picture for user_id: {user_id}")
         
         # Get user entity
         user = await client.get_entity(user_id)
         
-        # Download profile photo if exists
-        if hasattr(user, 'photo') and user.photo:
-            print(f"[PHOTO] User {user_id} has profile photo, downloading...")
-            try:
-                photo_bytes = await client.download_profile_photo(
-                    user,
-                    file=BytesIO(),
-                    download_big=True
-                )
-                
-                if photo_bytes:
-                    # Open the image
-                    image = Image.open(BytesIO(photo_bytes))
-                    
-                    # Convert to RGBA if needed
-                    if image.mode != 'RGBA':
-                        image = image.convert('RGBA')
-                    
-                    print(f"[PHOTO] Successfully downloaded profile picture for {user_id}")
-                    return image
-            except Exception as e:
-                print(f"[PHOTO] Error downloading profile photo for {user_id}: {e}")
+        # CORRECT: Download profile photo as bytes
+        photo_bytes = await client.download_profile_photo(user, file=bytes)
         
-        # If no profile photo or error, create a default one
-        print(f"[PHOTO] Creating default PFP for {user_id}")
-        return create_default_pfp(user_id)
-        
+        if photo_bytes:
+            # CORRECT: Open from BytesIO
+            img = Image.open(BytesIO(photo_bytes)).convert("RGBA")
+            print(f"[PHOTO] Successfully downloaded profile picture for {user_id}")
+            return img
+        else:
+            # No profile picture, use fallback
+            print(f"[PHOTO] No profile picture for {user_id}, using fallback")
+            return load_unknown_pfp()
+            
     except Exception as e:
         print(f"[ERROR] Downloading profile picture for {user_id}: {e}")
-        return create_default_pfp(user_id)
+        return load_unknown_pfp()
 
-def create_default_pfp(user_id):
-    """Create a default profile picture with initials"""
+def load_unknown_pfp():
+    """Load the unknown.png fallback image"""
     try:
-        # Create a 400x400 image
+        if os.path.exists(UNKNOWN_PFP):
+            img = Image.open(UNKNOWN_PFP).convert("RGBA")
+            print(f"[PHOTO] Loaded unknown.png fallback")
+            return img
+        else:
+            # Create a simple fallback if unknown.png doesn't exist
+            print(f"[WARNING] {UNKNOWN_PFP} not found, creating default fallback")
+            return create_default_fallback()
+    except Exception as e:
+        print(f"[ERROR] Loading unknown.png: {e}")
+        return create_default_fallback()
+
+def create_default_fallback():
+    """Create a default fallback image"""
+    try:
+        # Create a 400x400 image with question mark
         size = (400, 400)
-        
-        # Generate color from user ID
-        import hashlib
-        hash_obj = hashlib.md5(str(user_id).encode())
-        hex_dig = hash_obj.hexdigest()
-        color = tuple(int(hex_dig[i:i+2], 16) for i in (0, 2, 4))
-        
-        # Create image
-        image = Image.new('RGBA', size, (255, 255, 255, 0))
+        image = Image.new('RGBA', size, (100, 100, 100, 255))
         draw = ImageDraw.Draw(image)
         
         # Draw circle
         center_x, center_y = size[0] // 2, size[1] // 2
-        radius = min(center_x, center_y) - 10
+        radius = min(center_x, center_y) - 20
         
         draw.ellipse(
             [(center_x - radius, center_y - radius),
              (center_x + radius, center_y + radius)],
-            fill=color + (255,)
+            fill=(200, 200, 200, 255)
         )
         
-        # Add user ID initials (last 2 digits)
-        user_digits = user_id % 100
-        initials = f"U{user_digits:02d}"
-        
-        # Try to load font
+        # Add question mark
         try:
-            font_size = min(60, int(radius * 0.8))
-            font = ImageFont.truetype("arial.ttf", font_size)
+            font = ImageFont.truetype("arial.ttf", 120)
         except:
             font = ImageFont.load_default()
         
         draw.text(
             (center_x, center_y),
-            initials,
-            fill=(255, 255, 255, 255),
+            "?",
+            fill=(100, 100, 100, 255),
             anchor="mm",
             font=font
         )
@@ -218,10 +207,9 @@ def create_default_pfp(user_id):
         return image
         
     except Exception as e:
-        print(f"[ERROR] Creating default PFP: {e}")
-        # Return a simple colored circle as last resort
-        image = Image.new('RGBA', (400, 400), (100, 100, 255, 255))
-        return image
+        print(f"[ERROR] Creating default fallback: {e}")
+        # Last resort: solid color image
+        return Image.new('RGBA', (400, 400), (100, 100, 100, 255))
 
 def create_circular_mask(size, radius):
     """Create a circular mask"""
@@ -253,7 +241,7 @@ async def create_merged_photo(client, buyer_id, seller_id):
             print(f"[ERROR] Base image not found: {BASE_START_IMAGE}")
             return False, None, "Base image not found"
         
-        # Download profile pictures
+        # Download profile pictures - CORRECTED
         buyer_pfp = await download_profile_picture(client, buyer_id)
         seller_pfp = await download_profile_picture(client, seller_id)
         
@@ -512,9 +500,14 @@ Please select your roles below:"""
                     )
                     
                     # Clean up temp file
-                    os.remove(temp_file)
+                    try:
+                        os.remove(temp_file)
+                    except:
+                        pass
                     
                     print(f"[PHOTO] Merged preview sent for {chat_title}")
+                else:
+                    print(f"[ERROR] Failed to create merged photo: {message}")
                 
                 # Update group
                 group_data["session_initiated"] = True
@@ -655,23 +648,24 @@ Please select your roles below:"""
             group_type = group_data.get("type", "p2p")
             group_type_display = "P2P" if group_type == "p2p" else "OTC"
             
-            # Choose final template based on group type
+            # Choose correct base image based on group type
             if group_type == "p2p":
-                final_template = P2P_FINAL_IMAGE
+                final_base_image = P2P_FINAL_IMAGE if os.path.exists(P2P_FINAL_IMAGE) else BASE_START_IMAGE
             else:
-                final_template = OTC_FINAL_IMAGE
+                final_base_image = OTC_FINAL_IMAGE if os.path.exists(OTC_FINAL_IMAGE) else BASE_START_IMAGE
             
-            # Check if final template exists
-            if not os.path.exists(final_template):
-                print(f"[ERROR] Final template not found: {final_template}")
-                # Use base start as fallback
-                final_template = BASE_START_IMAGE
+            print(f"[PHOTO] Using final template: {final_base_image} for {group_type_display}")
             
             # Create final merged photo with the selected template
-            success, image_bytes, message = await create_merged_photo(
+            # We need to modify create_merged_photo to accept custom base image
+            success, image_bytes, message = await create_final_merged_photo(
                 self.client,
                 buyer['user_id'],
-                seller['user_id']
+                seller['user_id'],
+                final_base_image,
+                group_type_display,
+                buyer['name'],
+                seller['name']
             )
             
             if success:
@@ -684,6 +678,14 @@ Please select your roles below:"""
                     # UPDATE GROUP PHOTO (ONLY THIS ONE TIME!)
                     await set_group_photo(self.client, chat, temp_file)
                     
+                    # Also send as a message for confirmation
+                    await self.client.send_file(
+                        chat,
+                        temp_file,
+                        caption=f"✅ <b>{group_type_display} Escrow Session Finalized</b>\n\nGroup photo has been updated!",
+                        parse_mode='html'
+                    )
+                    
                     # Clean up
                     try:
                         os.remove(temp_file)
@@ -694,6 +696,8 @@ Please select your roles below:"""
                     
                 except Exception as e:
                     print(f"[ERROR] Could not update final group photo: {e}")
+            else:
+                print(f"[ERROR] Failed to create final photo: {message}")
             
             # Send final confirmation message
             message_text = f"""<b>✅ Escrow Session Finalized</b>
@@ -749,6 +753,7 @@ Please select your roles below:"""
             print("   • Automatic profile picture merging")
             print("   • Role selection system")
             print("   • Single group photo update on confirmation")
+            print("   • unknown.png fallback for missing profile pictures")
             print("\n📡 Bot is ready...")
             print("   Ctrl+C to stop\n")
             
@@ -788,26 +793,131 @@ Please select your roles below:"""
                 json.dump(default_config, f, indent=2)
             print(f"✅ Created default config at {PFP_CONFIG_PATH}")
         
-        # Check base image
-        assets_missing = []
-        if not os.path.exists(BASE_START_IMAGE):
-            assets_missing.append(f"Base template: {BASE_START_IMAGE}")
+        # Check required assets
+        required_assets = [BASE_START_IMAGE, UNKNOWN_PFP]
         
-        if not os.path.exists(P2P_FINAL_IMAGE):
-            print(f"⚠️  P2P final template not found: {P2P_FINAL_IMAGE}")
-            print("   Will use base template as fallback for P2P groups")
+        for asset in required_assets:
+            if not os.path.exists(asset):
+                print(f"❌ REQUIRED asset missing: {asset}")
+                if asset == UNKNOWN_PFP:
+                    print("   Creating unknown.png fallback...")
+                    # Create a simple unknown.png
+                    img = create_default_fallback()
+                    img.save(UNKNOWN_PFP)
+                    print(f"   Created {UNKNOWN_PFP}")
         
-        if not os.path.exists(OTC_FINAL_IMAGE):
-            print(f"⚠️  OTC final template not found: {OTC_FINAL_IMAGE}")
-            print("   Will use base template as fallback for OTC groups")
+        # Optional assets
+        optional_assets = [P2P_FINAL_IMAGE, OTC_FINAL_IMAGE]
         
-        if assets_missing:
-            print("⚠️  WARNING: Missing required assets:")
-            for asset in assets_missing:
-                print(f"   • {asset}")
-            print("\n   The bot will create fallback images.")
+        for asset in optional_assets:
+            if not os.path.exists(asset):
+                print(f"⚠️  Optional asset missing: {asset}")
+                print(f"   Will use {BASE_START_IMAGE} as fallback")
         
         print("✅ Asset check complete\n")
+
+async def create_final_merged_photo(client, buyer_id, seller_id, base_image_path, group_type, buyer_name, seller_name):
+    """Create final merged photo with custom base image and text"""
+    try:
+        # Load config
+        if os.path.exists(PFP_CONFIG_PATH):
+            with open(PFP_CONFIG_PATH, 'r') as f:
+                config = json.load(f)
+        else:
+            config = {
+                "BUYER_PFP": {"center_x": 470, "center_y": 384, "radius": 177},
+                "SELLER_PFP": {"center_x": 920, "center_y": 384, "radius": 177}
+            }
+        
+        # Check base image exists
+        if not os.path.exists(base_image_path):
+            print(f"[ERROR] Base image not found: {base_image_path}")
+            return False, None, "Base image not found"
+        
+        # Download profile pictures
+        buyer_pfp = await download_profile_picture(client, buyer_id)
+        seller_pfp = await download_profile_picture(client, seller_id)
+        
+        # Load base image
+        base_img = Image.open(base_image_path).convert('RGBA')
+        
+        # Get coordinates from config
+        buyer_config = config.get("BUYER_PFP", {})
+        seller_config = config.get("SELLER_PFP", {})
+        
+        buyer_x = buyer_config.get("center_x", 470)
+        buyer_y = buyer_config.get("center_y", 384)
+        buyer_radius = buyer_config.get("radius", 177)
+        
+        seller_x = seller_config.get("center_x", 920)
+        seller_y = seller_config.get("center_y", 384)
+        seller_radius = seller_config.get("radius", 177)
+        
+        # Resize profile pictures to match circle diameters
+        buyer_size = (buyer_radius * 2, buyer_radius * 2)
+        seller_size = (seller_radius * 2, seller_radius * 2)
+        
+        buyer_pfp = buyer_pfp.resize(buyer_size, Image.Resampling.LANCZOS)
+        seller_pfp = seller_pfp.resize(seller_size, Image.Resampling.LANCZOS)
+        
+        # Create circular masks
+        buyer_mask = create_circular_mask(buyer_size, buyer_radius)
+        seller_mask = create_circular_mask(seller_size, seller_radius)
+        
+        # Calculate positions (center to top-left)
+        buyer_pos = (buyer_x - buyer_radius, buyer_y - buyer_radius)
+        seller_pos = (seller_x - seller_radius, seller_y - seller_radius)
+        
+        # Paste buyer PFP
+        base_img.paste(buyer_pfp, buyer_pos, buyer_mask)
+        
+        # Paste seller PFP
+        base_img.paste(seller_pfp, seller_pos, seller_mask)
+        
+        # Add text labels if this is a final image
+        if "final" in base_image_path.lower() or base_image_path != BASE_START_IMAGE:
+            draw = ImageDraw.Draw(base_img)
+            
+            try:
+                font = ImageFont.truetype("arial.ttf", 36)
+            except:
+                font = ImageFont.load_default()
+            
+            # Add buyer label
+            buyer_label = f"BUYER: {buyer_name[:15]}"
+            draw.text((buyer_x, buyer_y + buyer_radius + 30), buyer_label, 
+                     fill=(255, 255, 255), font=font, anchor="mt")
+            
+            # Add seller label
+            seller_label = f"SELLER: {seller_name[:15]}"
+            draw.text((seller_x, seller_y + seller_radius + 30), seller_label, 
+                     fill=(255, 255, 255), font=font, anchor="mt")
+            
+            # Add group type at the bottom
+            type_label = f"{group_type} ESCROW"
+            try:
+                title_font = ImageFont.truetype("arial.ttf", 48)
+            except:
+                title_font = font
+            
+            # Get image dimensions
+            img_width, img_height = base_img.size
+            draw.text((img_width // 2, img_height - 50), type_label, 
+                     fill=(255, 215, 0), font=title_font, anchor="mb", 
+                     stroke_width=2, stroke_fill=(0, 0, 0))
+        
+        # Convert to bytes
+        img_bytes = BytesIO()
+        base_img.save(img_bytes, format='PNG')
+        img_bytes.seek(0)
+        
+        return True, img_bytes, "✅ Final merged photo created"
+        
+    except Exception as e:
+        print(f"[ERROR] Creating final merged photo: {e}")
+        import traceback
+        traceback.print_exc()
+        return False, None, f"❌ Error creating final merged photo: {e}"
 
 def main():
     """Main function"""
