@@ -23,6 +23,7 @@ from handlers.create import handle_create, handle_create_p2p, handle_create_othe
 from handlers.stats import handle_stats
 from handlers.about import handle_about
 from handlers.help import handle_help
+from handlers.addresses import setup_address_handlers
 
 # Import utilities
 from utils.texts import (
