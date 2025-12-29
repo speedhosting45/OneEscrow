@@ -409,172 +409,172 @@ class EscrowBot:
             except:
                 pass
     
-    async def handle_begin_command(self, event):
-        """Handle /begin command - Create merged photo and show role buttons"""
-        try:
-            # Get chat and user
-            chat = await event.get_chat()
-            user = await event.get_sender()
-            chat_id = str(chat.id)
-            chat_title = getattr(chat, 'title', 'Unknown')
-            
-            # Clean chat ID
-            if chat_id.startswith('-100'):
-                clean_chat_id = chat_id[4:]
-            else:
-                clean_chat_id = chat_id
-            
-            # Load groups
-            groups = load_groups()
-            group_data = None
-            group_key = None
-            
-            # Find group
-            if clean_chat_id in groups:
-                group_data = groups[clean_chat_id]
-                group_key = clean_chat_id
-            elif chat_id in groups:
-                group_data = groups[chat_id]
-                group_key = chat_id
-            else:
-                for key, data in groups.items():
-                    if data.get("name") == chat_title:
-                        group_data = data
-                        group_key = key
-                        break
-            
-            if not group_data:
-                try:
-                    await event.reply(GROUP_NOT_FOUND_MESSAGE, parse_mode='html')
-                except:
-                    pass
-                return
-            
-            # Check if already initiated
-            if group_data.get("session_initiated", False):
-                try:
-                    await event.reply(SESSION_ALREADY_INITIATED_MESSAGE, parse_mode='html')
-                except:
-                    pass
-                return
-            
-            # Get participants (EXCLUDE CREATOR and USER WHO SENT /begin)
+async def handle_begin_command(self, event):
+    """Handle /begin command - Create merged photo and show role buttons"""
+    try:
+        # Get chat and user
+        chat = await event.get_chat()
+        user = await event.get_sender()
+        chat_id = str(chat.id)
+        chat_title = getattr(chat, 'title', 'Unknown')
+        
+        # Clean chat ID
+        if chat_id.startswith('-100'):
+            clean_chat_id = chat_id[4:]
+        else:
+            clean_chat_id = chat_id
+        
+        # Load groups
+        groups = load_groups()
+        group_data = None
+        group_key = None
+        
+        # Find group
+        if clean_chat_id in groups:
+            group_data = groups[clean_chat_id]
+            group_key = clean_chat_id
+        elif chat_id in groups:
+            group_data = groups[chat_id]
+            group_key = chat_id
+        else:
+            for key, data in groups.items():
+                if data.get("name") == chat_title:
+                    group_data = data
+                    group_key = key
+                    break
+        
+        if not group_data:
             try:
-                participants = await self.client.get_participants(chat)
-                real_users = []
+                await event.reply(GROUP_NOT_FOUND_MESSAGE, parse_mode='html')
+            except:
+                pass
+            return
+        
+        # Check if already initiated
+        if group_data.get("session_initiated", False):
+            try:
+                await event.reply(SESSION_ALREADY_INITIATED_MESSAGE, parse_mode='html')
+            except:
+                pass
+            return
+        
+        # Get participants (EXCLUDE ONLY BOT - ALLOW CREATOR!)
+        try:
+            participants = await self.client.get_participants(chat)
+            eligible_users = []
+            
+            bot_id = (await self.client.get_me()).id
+            
+            print(f"[BEGIN] Total participants: {len(participants)}")
+            print(f"[BEGIN] Bot ID: {bot_id}")
+            
+            for participant in participants:
+                participant_id = participant.id
                 
-                creator_user_id = group_data.get("creator_user_id")
-                begin_sender_id = user.id  # User who sent /begin
+                # Skip bot ONLY
+                if participant_id == bot_id:
+                    print(f"[BEGIN] Skipping bot: {participant_id}")
+                    continue
                 
-                print(f"[BEGIN] Creator ID: {creator_user_id}, /begin sender ID: {begin_sender_id}")
+                # Check if it's a bot account
+                if hasattr(participant, 'bot') and participant.bot:
+                    print(f"[BEGIN] Skipping bot account: {participant_id}")
+                    continue
                 
-                for participant in participants:
-                    # Skip bots
-                    if hasattr(participant, 'bot') and participant.bot:
-                        continue
-                    
-                    # Skip creator
-                    if creator_user_id and participant.id == creator_user_id:
-                        print(f"[BEGIN] Skipping creator: {participant.id}")
-                        continue
-                    
-                    # Skip user who sent /begin (if not creator)
-                    if participant.id == begin_sender_id:
-                        print(f"[BEGIN] Skipping /begin sender: {participant.id}")
-                        continue
-                    
-                    real_users.append(participant)
+                # Add ALL users (including creator!) as eligible
+                eligible_users.append(participant)
+                print(f"[BEGIN] Added user: ID={participant_id}, Name={get_user_display(participant)}")
+            
+            member_count = len(eligible_users)
+            print(f"[BEGIN] Found {member_count} eligible users (excluding bot only)")
+            
+            # Need exactly 2 eligible users
+            if member_count != 2:
+                try:
+                    message = INSUFFICIENT_MEMBERS_MESSAGE.format(current_count=member_count)
+                    await event.reply(message, parse_mode='html')
+                except:
+                    pass
+                return
+            
+            # Update members
+            group_data["members"] = [u.id for u in eligible_users]
+            groups[group_key] = group_data
+            save_groups(groups)
+            
+            # Get the 2 eligible users for photo
+            user1, user2 = eligible_users[0], eligible_users[1]
+            
+            print(f"[BEGIN] Selected users for roles:")
+            print(f"[BEGIN]   User1: ID={user1.id}, Display={get_user_display(user1)}")
+            print(f"[BEGIN]   User2: ID={user2.id}, Display={get_user_display(user2)}")
+            
+            # Create merged photo with their profile pictures
+            success, image_bytes, message = await create_merged_photo(
+                self.client, 
+                user1.id, 
+                user2.id
+            )
+            
+            if success:
+                # Send the merged photo as preview
+                temp_file = "temp_merged_preview.png"
+                with open(temp_file, "wb") as f:
+                    f.write(image_bytes.getvalue())
                 
-                member_count = len(real_users)
-                print(f"[BEGIN] Found {member_count} real users (excluding creator and /begin sender)")
-                
-                # Need at least 1 other user
-                if member_count < 1:
-                    try:
-                        await event.reply("❌ Need at least 1 other participant (excluding yourself and creator)", parse_mode='html')
-                    except:
-                        pass
-                    return
-                
-                # If only 1 other user, that's OK (2 total participants: sender + 1 other)
-                # If more than 1, take first 2
-                selected_users = []
-                
-                # Always include the user who sent /begin (as first participant)
-                selected_users.append(user)
-                
-                # Add the first available other user
-                if real_users:
-                    selected_users.append(real_users[0])
-                
-                print(f"[BEGIN] Selected participants: {[get_user_display(u) for u in selected_users]}")
-                
-                # Create merged photo with their profile pictures
-                success, image_bytes, message = await create_merged_photo(
-                    self.client, 
-                    selected_users[0].id, 
-                    selected_users[1].id
+                # Use text from texts.py
+                caption = MERGED_PHOTO_CAPTION.format(
+                    user1_name=get_user_display(user1),
+                    user2_name=get_user_display(user2)
                 )
                 
-                if success:
-                    # Send the merged photo as preview
-                    temp_file = "temp_merged_preview.png"
-                    with open(temp_file, "wb") as f:
-                        f.write(image_bytes.getvalue())
-                    
-                    # Use text from texts.py
-                    caption = MERGED_PHOTO_CAPTION.format(
-                        user1_name=get_user_display(selected_users[0]),
-                        user2_name=get_user_display(selected_users[1])
-                    )
-                    
-                    # Get buttons for role selection
-                    buttons = get_session_buttons(group_key)
-                    
-                    # Send photo with buttons (only visible to non-creator users)
-                    await self.client.send_file(
-                        chat,
-                        temp_file,
-                        caption=caption,
-                        parse_mode='html',
-                        buttons=buttons
-                    )
-                    
-                    # Clean up temp file
-                    try:
-                        os.remove(temp_file)
-                    except:
-                        pass
-                    
-                    print(f"[PHOTO] Merged preview sent for {chat_title}")
-                else:
-                    print(f"[ERROR] Failed to create merged photo: {message}")
-                    # Send text message instead
-                    await self.client.send_message(
-                        chat,
-                        f"❌ Failed to create preview photo. {message}\n\nPlease select your roles:",
-                        parse_mode='html',
-                        buttons=get_session_buttons(group_key)
-                    )
+                # Get buttons for role selection
+                buttons = get_session_buttons(group_key)
                 
-                # Update group
-                group_data["session_initiated"] = True
-                group_data["user1_id"] = selected_users[0].id
-                group_data["user2_id"] = selected_users[1].id
-                groups[group_key] = group_data
-                save_groups(groups)
+                # Send photo with buttons
+                await self.client.send_file(
+                    chat,
+                    temp_file,
+                    caption=caption,
+                    parse_mode='html',
+                    buttons=buttons
+                )
                 
-                print(f"[SUCCESS] Session initiated in {chat_title}")
-                
-            except Exception as e:
-                print(f"[ERROR] /begin: {e}")
+                # Clean up temp file
                 try:
-                    await event.reply(f"❌ Error: {str(e)[:100]}", parse_mode='html')
+                    os.remove(temp_file)
                 except:
                     pass
                 
+                print(f"[PHOTO] Merged preview sent for {chat_title}")
+            else:
+                print(f"[ERROR] Failed to create merged photo: {message}")
+                # Send text message instead
+                await self.client.send_message(
+                    chat,
+                    f"❌ Failed to create preview photo. {message}\n\nPlease select your roles:",
+                    parse_mode='html',
+                    buttons=get_session_buttons(group_key)
+                )
+            
+            # Update group
+            group_data["session_initiated"] = True
+            group_data["user1_id"] = user1.id
+            group_data["user2_id"] = user2.id
+            groups[group_key] = group_data
+            save_groups(groups)
+            
+            print(f"[SUCCESS] Session initiated in {chat_title}")
+            
         except Exception as e:
-            print(f"[ERROR] Handling /begin: {e}")
+            print(f"[ERROR] /begin: {e}")
+            try:
+                await event.reply(f"❌ Error: {str(e)[:100]}", parse_mode='html')
+            except:
+                pass
+        
+    except Exception as e:
+        print(f"[ERROR] Handling /begin: {e}")
     
     async def handle_role_selection(self, event):
         """Handle role selection - Generate final PFP logo and update group photo"""
