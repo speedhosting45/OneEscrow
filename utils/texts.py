@@ -328,36 +328,16 @@ MERGED_PHOTO_CAPTION = """
 <blockquote>Please select your roles to proceed with configuration.</blockquote>
 """
 
-FINAL_PHOTO_CAPTION = """
-✅ <b>{group_type} Escrow Session Finalized</b>
-
-Group photo has been updated!
-"""
-
 PARTICIPANTS_CONFIRMED_MESSAGE = """
-✅ <b>Participants Confirmed</b>
+𝘗𝘢𝘳𝘵𝘪𝘤𝘪𝘱𝘢𝘯𝘵𝘴 𝘊𝘰𝘯𝘧𝘪𝘳𝘮𝘦𝘥
 
 <blockquote>
-<b>Type:</b> {group_type_display} Escrow
+<b>Transaction Type:</b> {group_type_display}
 <b>Buyer:</b> {buyer_name}
 <b>Seller:</b> {seller_name}
 </blockquote>
 
-<b>Status:</b> Group photo has been updated with {group_type_display} template.
+<code>/buyer wallet_address</code>
+<code>/seller wallet_address</code>
 
-<b>Next Step:</b> Wallet setup will begin shortly.
-"""
-
-ESCROW_FINALIZED_MESSAGE = """
-✅ <b>Escrow Session Finalized</b>
-
-<blockquote>
-<b>Type:</b> {group_type_display} Escrow
-<b>Buyer:</b> {buyer_name}
-<b>Seller:</b> {seller_name}
-</blockquote>
-
-<b>Status:</b> Group photo has been updated with {group_type_display} template.
-
-<b>Next Step:</b> Wallet setup will begin shortly.
-"""
+Configure settlement addresses to proceed.
