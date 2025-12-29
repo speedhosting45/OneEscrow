@@ -20,88 +20,101 @@ CREATE_MESSAGE = """
 
 All escrows operate within private, bot-moderated groups.
 """
-# Add to utils/texts.py
+# Address Handler Messages - Professional Style
 
-# Address Handler Messages - MINIMAL STYLE
-
-# Command Prompts
 BUYER_ADDRESS_PROMPT = """
-𝘚𝘦𝘵 𝘗𝘶𝘳𝘤𝘩𝘢𝘴𝘦𝘳 𝘈𝘥𝘥𝘳𝘦𝘴𝘴
+𝘗𝘶𝘳𝘤𝘩𝘢𝘴𝘦𝘳 𝘚𝘦𝘵𝘵𝘭𝘦𝘮𝘦𝘯𝘵 𝘈𝘥𝘥𝘳𝘦𝘴𝘴
 
-<code>/buyer address</code>
+Format: <code>/buyer wallet_address</code>
 
 <blockquote>Example: /buyer 0x742d35Cc6634C0532925a3b844Bc9e0E0F14eC73</blockquote>
 """
 
 SELLER_ADDRESS_PROMPT = """
-𝘚𝘦𝘵 𝘗𝘳𝘰𝘷𝘪𝘥𝘦𝘳 𝘈𝘥𝘥𝘳𝘦𝘴𝘴
+𝘗𝘳𝘰𝘷𝘪𝘥𝘦𝘳 𝘚𝘦𝘵𝘵𝘭𝘦𝘮𝘦𝘯𝘵 𝘈𝘥𝘥𝘳𝘦𝘴𝘴
 
-<code>/seller address</code>
+Format: <code>/seller wallet_address</code>
 
 <blockquote>Example: /seller TQrY8tryqsYVCYS3MFbtffiPp2ccyn4STm</blockquote>
 """
 
-# Success Messages
 ADDRESS_SAVED = """
-𝘈𝘥𝘥𝘳𝘦𝘴𝘴 𝘙𝘦𝘨𝘪𝘴𝘵𝘦𝘳𝘦𝘥
+𝘈𝘥𝘥𝘳𝘦𝘴𝘴 𝘙𝘦𝘨𝘪𝘴𝘵𝘳𝘢𝘵𝘪𝘰𝘯 𝘊𝘰𝘯𝘧𝘪𝘳𝘮𝘦𝘥
 
 <b>Role:</b> {role}
 <b>Network:</b> {chain}
-<b>User:</b> {user_mention}
+<b>Participant:</b> {user_mention}
 
 <code>{address}</code>
+
+<blockquote>Settlement address recorded for transaction execution</blockquote>
 """
 
 ADDRESSES_VIEW = """
-𝘚𝘦𝘵𝘵𝘭𝘦𝘮𝘦𝘯𝘵 𝘈𝘥𝘥𝘳𝘦𝘴𝘴𝘦𝘴
+𝘚𝘦𝘵𝘵𝘭𝘦𝘮𝘦𝘯𝘵 𝘊𝘰𝘯𝘧𝘪𝘨𝘶𝘳𝘢𝘵𝘪𝘰𝘯
 
-<b>Purchaser</b>
-• User: {buyer_mention}
+<b>Purchasing Party</b>
+• Participant: {buyer_mention}
 • Network: {buyer_chain}
 <code>{buyer_address}</code>
 
-<b>Provider</b>
-• User: {seller_mention}
+<b>Provisioning Party</b>
+• Participant: {seller_mention}
 • Network: {seller_chain}
 <code>{seller_address}</code>
 
-<blockquote>Protocol: {group_name}</blockquote>
+<blockquote>Protocol Environment: {group_name}</blockquote>
 """
 
-# Error Messages
-INVALID_ADRESS = """
-𝘕𝘦𝘵𝘸𝘰𝘳𝘬 𝘝𝘢𝘭𝘪𝘥𝘢𝘵𝘪𝘰𝘯 𝘍𝘢𝘪𝘭𝘦𝘥
+INVALID_ADDRESS = """
+𝘈𝘥𝘥𝘳𝘦𝘴𝘴 𝘝𝘢𝘭𝘪𝘥𝘢𝘵𝘪𝘰𝘯 𝘍𝘢𝘪𝘭𝘦𝘥
 
-<code>{address}</code> rejected by {chain} network.
+<code>{address}</code>
 
-• Verify cryptographic format
-• Confirm network compatibility
-• Test with alternative address
+<blockquote>Standard format requirements:
+• USDT BEP20: 42 hexadecimal characters (0x...)
+• USDT TRC20: 34 base58 characters (T...)
+• BTC: Legacy (1...), SegWit (3...), Native SegWit (bc1...)
+• ETH/ERC20: 42 hexadecimal characters (0x...)
+• LTC: Legacy (L...), SegWit (M...), Native SegWit (ltc1...)</blockquote>
 """
+
+NO_ROLE = """
+𝘊𝘰𝘯𝘵𝘳𝘢𝘤𝘵𝘶𝘢𝘭 𝘗𝘰𝘴𝘪𝘵𝘪𝘰𝘯 𝘜𝘯𝘢𝘴𝘴𝘪𝘨𝘯𝘦𝘥
+
+No active role assigned in transaction protocol.
+
+<blockquote>Execute /begin within escrow environment to establish position</blockquote>
+"""
+
 ADDRESS_ALREADY_SET = """
-𝘈𝘥𝘥𝘳𝘦𝘴𝘴 𝘌𝘹𝘪𝘴𝘵𝘴
+𝘈𝘥𝘥𝘳𝘦𝘴𝘴 𝘊𝘰𝘯𝘧𝘪𝘨𝘶𝘳𝘢𝘵𝘪𝘰𝘯 𝘊𝘰𝘮𝘱𝘭𝘦𝘵𝘦
 
 <b>Role:</b> {role}
 <code>{address}</code>
 
-<blockquote>Contact arbitration for modification</blockquote>
-"""
-
-NO_ROLE = """
-𝘙𝘰𝘭𝘦 𝘕𝘰𝘵 𝘈𝘴𝘴𝘪𝘨𝘯𝘦𝘥
-
-No contractual position assigned in active protocol.
-
-<blockquote>Use /begin within escrow environment</blockquote>
+<blockquote>Settlement address already registered and immutable</blockquote>
 """
 
 NO_ADDRESSES_SET = """
-𝘕𝘰 𝘚𝘦𝘵𝘵𝘭𝘦𝘮𝘦𝘯𝘵 𝘈𝘥𝘥𝘳𝘦𝘴𝘴𝘦𝘴
+𝘚𝘦𝘵𝘵𝘭𝘦𝘮𝘦𝘯𝘵 𝘈𝘥𝘥𝘳𝘦𝘴𝘴𝘦𝘴 𝘗𝘦𝘯𝘥𝘪𝘯𝘨
 
-• Purchaser: Not configured
-• Provider: Not configured
+• Purchasing Party: Not configured
+• Provisioning Party: Not configured
 
-<blockquote>Configure with /buyer or /seller</blockquote>
+<blockquote>Configure settlement addresses:
+Purchaser: <code>/buyer address</code>
+Provider: <code>/seller address</code></blockquote>
+"""
+
+ADDRESS_VERIFICATION_FAILED = """
+𝘕𝘦𝘵𝘸𝘰𝘳𝘬 𝘝𝘦𝘳𝘪𝘧𝘪𝘤𝘢𝘵𝘪𝘰𝘯 𝘜𝘯𝘴𝘶𝘤𝘤𝘦𝘴𝘴𝘧𝘶𝘭
+
+<code>{address}</code> failed validation on {chain} network.
+
+<blockquote>• Verify cryptographic format compliance
+• Confirm network compatibility
+• Test with network-specific validator</blockquote>
 
 P2P_CREATED_MESSAGE = """
 𝘗2𝘗 𝘌𝘴𝘤𝘳𝘰𝘸 𝘌𝘴𝘵𝘢𝘣𝘭𝘪𝘴𝘩𝘦𝘥
