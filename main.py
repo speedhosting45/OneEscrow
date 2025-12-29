@@ -45,7 +45,7 @@ GROUPS_FILE = 'data/active_groups.json'
 USER_ROLES_FILE = 'data/user_roles.json'
 
 # Asset paths
-BASE_START_IMAGE = "assets/base_start1.png"  # For /begin preview
+BASE_START_IMAGE = "assets/base_start.png"  # For /begin preview
 PFP_TEMPLATE = "assets/tg1.png"  # For final group PFP
 UNKNOWN_PFP = "assets/unknown.png"
 PFP_CONFIG_PATH = "config/pfp_config.json"
