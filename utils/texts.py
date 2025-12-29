@@ -115,6 +115,7 @@ ADDRESS_VERIFICATION_FAILED = """
 <blockquote>• Verify cryptographic format compliance
 • Confirm network compatibility
 • Test with network-specific validator</blockquote>
+"""
 
 P2P_CREATED_MESSAGE = """
 𝘗2𝘗 𝘌𝘴𝘤𝘳𝘰𝘸 𝘌𝘴𝘵𝘢𝘣𝘭𝘪𝘴𝘩𝘦𝘥
@@ -177,17 +178,17 @@ ERROR_MESSAGE = """
 CHANNEL_LOG_CREATION = """
 𝘗𝘳𝘰𝘵𝘰𝘤𝘰𝘭 𝘐𝘯𝘪𝘵𝘪𝘢𝘵𝘪𝘰𝘯
 
-<code>┌─────────────────────────────</code>
+<code>\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500</code>
 <b>ID:</b> {group_name}
 <b>Type:</b> {escrow_type}
 <b>Time:</b> {timestamp}
-<code>├─────────────────────────────</code>
+<code>\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500</code>
 <b>Initiator:</b> {creator_name}
 <b>TG ID:</b> <code>{creator_id}</code>
-<code>├─────────────────────────────</code>
+<code>\u251c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500</code>
 <b>Group ID:</b> <code>{chat_id}</code>
 <b>Status:</b> Configuration
-<code>└─────────────────────────────</code>
+<code>\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500</code>
 
 <blockquote>Transaction environment established. Counterparty configuration pending.</blockquote>
 """
@@ -341,3 +342,23 @@ PARTICIPANTS_CONFIRMED_MESSAGE = """
 <code>/seller wallet_address</code>
 
 Configure settlement addresses to proceed.
+"""
+
+# Alternative with ASCII box characters if Unicode is problematic:
+CHANNEL_LOG_CREATION_ASCII = """
+𝘗𝘳𝘰𝘵𝘰𝘤𝘰𝘭 𝘐𝘯𝘪𝘵𝘪𝘢𝘵𝘪𝘰𝘯
+
+<code>+-----------------------------</code>
+<b>ID:</b> {group_name}
+<b>Type:</b> {escrow_type}
+<b>Time:</b> {timestamp}
+<code>|-----------------------------</code>
+<b>Initiator:</b> {creator_name}
+<b>TG ID:</b> <code>{creator_id}</code>
+<code>|-----------------------------</code>
+<b>Group ID:</b> <code>{chat_id}</code>
+<b>Status:</b> Configuration
+<code>+-----------------------------</code>
+
+<blockquote>Transaction environment established. Counterparty configuration pending.</blockquote>
+"""
