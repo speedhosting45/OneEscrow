@@ -45,9 +45,8 @@ GROUPS_FILE = 'data/active_groups.json'
 USER_ROLES_FILE = 'data/user_roles.json'
 
 # Asset paths
-BASE_START_IMAGE = "assets/base_start.png"
-P2P_FINAL_IMAGE = "assets/p2p_logo_template.png"
-OTC_FINAL_IMAGE = "assets/otc_logo_template.png"
+BASE_START_IMAGE = "assets/base_start1.png"  # For /begin preview
+PFP_TEMPLATE = "assets/tg1.png"  # For final group PFP
 UNKNOWN_PFP = "assets/unknown.png"
 PFP_CONFIG_PATH = "config/pfp_config.json"
 
@@ -134,18 +133,18 @@ async def set_group_photo(client, chat, photo_path):
         raise e
 
 async def download_profile_picture(client, user_id):
-    """Download user's profile picture - CORRECTED VERSION"""
+    """Download user's profile picture"""
     try:
         print(f"[PHOTO] Downloading profile picture for user_id: {user_id}")
         
         # Get user entity
         user = await client.get_entity(user_id)
         
-        # CORRECT: Download profile photo as bytes
+        # Download profile photo as bytes
         photo_bytes = await client.download_profile_photo(user, file=bytes)
         
         if photo_bytes:
-            # CORRECT: Open from BytesIO
+            # Open from BytesIO
             img = Image.open(BytesIO(photo_bytes)).convert("RGBA")
             print(f"[PHOTO] Successfully downloaded profile picture for {user_id}")
             return img
@@ -225,7 +224,7 @@ def create_circular_mask(size, radius):
     return mask
 
 async def create_merged_photo(client, buyer_id, seller_id):
-    """Create merged photo with both profile pictures"""
+    """Create merged photo with both profile pictures for /begin preview"""
     try:
         # Load config
         if os.path.exists(PFP_CONFIG_PATH):
@@ -242,7 +241,7 @@ async def create_merged_photo(client, buyer_id, seller_id):
             print(f"[ERROR] Base image not found: {BASE_START_IMAGE}")
             return False, None, "Base image not found"
         
-        # Download profile pictures - CORRECTED
+        # Download profile pictures
         buyer_pfp = await download_profile_picture(client, buyer_id)
         seller_pfp = await download_profile_picture(client, seller_id)
         
@@ -294,108 +293,6 @@ async def create_merged_photo(client, buyer_id, seller_id):
         import traceback
         traceback.print_exc()
         return False, None, f"❌ Error creating merged photo: {e}"
-
-async def create_final_merged_photo(client, buyer_id, seller_id, base_image_path, buyer_name, seller_name):
-    """Create final merged photo with custom base image and text"""
-    try:
-        # Load config
-        if os.path.exists(PFP_CONFIG_PATH):
-            with open(PFP_CONFIG_PATH, 'r') as f:
-                config = json.load(f)
-        else:
-            config = {
-                "BUYER_PFP": {"center_x": 470, "center_y": 384, "radius": 177},
-                "SELLER_PFP": {"center_x": 920, "center_y": 384, "radius": 177}
-            }
-        
-        # Check base image exists
-        if not os.path.exists(base_image_path):
-            print(f"[ERROR] Base image not found: {base_image_path}")
-            # Fallback to base start image
-            base_image_path = BASE_START_IMAGE
-            if not os.path.exists(base_image_path):
-                return False, None, "No base image found"
-        
-        # Download profile pictures
-        buyer_pfp = await download_profile_picture(client, buyer_id)
-        seller_pfp = await download_profile_picture(client, seller_id)
-        
-        # Load base image
-        base_img = Image.open(base_image_path).convert('RGBA')
-        
-        # Get coordinates from config
-        buyer_config = config.get("BUYER_PFP", {})
-        seller_config = config.get("SELLER_PFP", {})
-        
-        buyer_x = buyer_config.get("center_x", 470)
-        buyer_y = buyer_config.get("center_y", 384)
-        buyer_radius = buyer_config.get("radius", 177)
-        
-        seller_x = seller_config.get("center_x", 920)
-        seller_y = seller_config.get("center_y", 384)
-        seller_radius = seller_config.get("radius", 177)
-        
-        # Resize profile pictures to match circle diameters
-        buyer_size = (buyer_radius * 2, buyer_radius * 2)
-        seller_size = (seller_radius * 2, seller_radius * 2)
-        
-        buyer_pfp = buyer_pfp.resize(buyer_size, Image.Resampling.LANCZOS)
-        seller_pfp = seller_pfp.resize(seller_size, Image.Resampling.LANCZOS)
-        
-        # Create circular masks
-        buyer_mask = create_circular_mask(buyer_size, buyer_radius)
-        seller_mask = create_circular_mask(seller_size, seller_radius)
-        
-        # Calculate positions (center to top-left)
-        buyer_pos = (buyer_x - buyer_radius, buyer_y - buyer_radius)
-        seller_pos = (seller_x - seller_radius, seller_y - seller_radius)
-        
-        # Paste buyer PFP
-        base_img.paste(buyer_pfp, buyer_pos, buyer_mask)
-        
-        # Paste seller PFP
-        base_img.paste(seller_pfp, seller_pos, seller_mask)
-        
-        # Add text labels if this is a final image
-        try:
-            # Create drawing context
-            draw = ImageDraw.Draw(base_img)
-            
-            # Try to load font
-            try:
-                font = ImageFont.truetype("arial.ttf", 36)
-            except:
-                # Fallback to default
-                font = ImageFont.load_default()
-            
-            # Add buyer label (truncate if too long)
-            safe_buyer_name = str(buyer_name)[:15]
-            buyer_label = f"BUYER: {safe_buyer_name}"
-            draw.text((buyer_x, buyer_y + buyer_radius + 30), buyer_label, 
-                     fill=(255, 255, 255), font=font, anchor="mt")
-            
-            # Add seller label (truncate if too long)
-            safe_seller_name = str(seller_name)[:15]
-            seller_label = f"SELLER: {safe_seller_name}"
-            draw.text((seller_x, seller_y + seller_radius + 30), seller_label, 
-                     fill=(255, 255, 255), font=font, anchor="mt")
-                    
-        except Exception as text_error:
-            print(f"[WARNING] Could not add text labels: {text_error}")
-            # Continue without text if there's an error
-        
-        # Convert to bytes
-        img_bytes = BytesIO()
-        base_img.save(img_bytes, format='PNG')
-        img_bytes.seek(0)
-        
-        return True, img_bytes, "✅ Final merged photo created"
-        
-    except Exception as e:
-        print(f"[ERROR] Creating final merged photo: {e}")
-        import traceback
-        traceback.print_exc()
-        return False, None, f"❌ Error creating final merged photo: {e}"
 
 class EscrowBot:
     def __init__(self):
@@ -635,7 +532,7 @@ class EscrowBot:
             print(f"[ERROR] Handling /begin: {e}")
     
     async def handle_role_selection(self, event):
-        """Handle role selection - Update with final P2P/OTC photo"""
+        """Handle role selection - Generate final PFP logo and update group photo"""
         try:
             # Get user
             sender = await event.get_sender()
@@ -730,14 +627,14 @@ class EscrowBot:
             seller_count = sum(1 for u in roles[group_id].values() if u.get("role") == "seller")
             
             if buyer_count >= 1 and seller_count >= 1:
-                await self.update_final_group_photo(chat, group_id, roles[group_id])
+                await self.generate_final_pfp_logo(chat, group_id, roles[group_id])
                 
         except Exception as e:
             print(f"[ERROR] Role selection: {e}")
             await event.answer("❌ Error selecting role", alert=True)
     
-    async def update_final_group_photo(self, chat, group_id, user_roles):
-        """Update group photo with final P2P/OTC template - ONLY CALLED ONCE!"""
+    async def generate_final_pfp_logo(self, chat, group_id, user_roles):
+        """Generate final PFP logo and update group photo - ONLY CALLED ONCE!"""
         try:
             # Find buyer and seller
             buyer = None
@@ -758,28 +655,26 @@ class EscrowBot:
             group_type = group_data.get("type", "p2p")
             group_type_display = "P2P" if group_type == "p2p" else "OTC"
             
-            # Choose correct template based on group type
-            if group_type == "p2p":
-                template_path = P2P_FINAL_IMAGE
-            else:
-                template_path = OTC_FINAL_IMAGE
+            print(f"[PFP] Generating final logo for {group_type_display} escrow")
             
-            print(f"[PHOTO] Using final template: {template_path} for {group_type_display}")
+            # Use PFPGenerator to create logo
+            from utils.pfpgen import PFPGenerator
             
-            # Create final merged photo with the selected template
-            success, image_bytes, message = await create_final_merged_photo(
-                self.client,
-                buyer['user_id'],
-                seller['user_id'],
-                template_path,
-                buyer['name'],
-                seller['name']
+            # Initialize PFP generator
+            pfp_gen = PFPGenerator(template_path=PFP_TEMPLATE)
+            
+            # Generate logo with formatted usernames
+            success, image_bytes, message = pfp_gen.generate_logo(
+                buyer_username=buyer['name'],
+                buyer_user_id=buyer['user_id'],
+                seller_username=seller['name'],
+                seller_user_id=seller['user_id']
             )
             
             if success:
                 try:
                     # Save to temporary file
-                    temp_file = f"temp_final_{group_type}.png"
+                    temp_file = f"temp_final_pfp_{group_type}.png"
                     with open(temp_file, "wb") as f:
                         f.write(image_bytes.getvalue())
                     
@@ -801,7 +696,7 @@ class EscrowBot:
                     except:
                         pass
                     
-                    print(f"[PHOTO] Final {group_type_display} group photo updated!")
+                    print(f"[PFP] Final {group_type_display} PFP logo updated!")
                     
                 except Exception as e:
                     print(f"[ERROR] Could not update final group photo: {e}")
@@ -810,13 +705,13 @@ class EscrowBot:
                         await self.client.send_file(
                             chat,
                             temp_file,
-                            caption=f"✅ Final {group_type_display} photo generated (but couldn't update group photo)",
+                            caption=f"✅ Final {group_type_display} PFP logo generated (but couldn't update group photo)",
                             parse_mode='html'
                         )
                     except:
                         pass
             else:
-                print(f"[ERROR] Failed to create final photo: {message}")
+                print(f"[ERROR] Failed to create final PFP logo: {message}")
             
             # Send final confirmation message
             message_text = PARTICIPANTS_CONFIRMED_MESSAGE.format(
@@ -834,7 +729,7 @@ class EscrowBot:
             print(f"[SETUP] {group_type_display} escrow finalized: {buyer['name']} ↔ {seller['name']}")
             
         except Exception as e:
-            print(f"[ERROR] Updating final group photo: {e}")
+            print(f"[ERROR] Generating final PFP logo: {e}")
             import traceback
             traceback.print_exc()
 
@@ -865,10 +760,11 @@ class EscrowBot:
             
             print("\n🚀 FEATURES:")
             print("   • P2P & OTC Escrow Creation")
-            print("   • Automatic profile picture merging")
+            print("   • Profile picture preview on /begin")
+            print("   • PFP logo generation on role confirmation")
             print("   • Role selection system")
             print("   • Single group photo update on confirmation")
-            print("   • unknown.png fallback for missing profile pictures")
+            print("   • Automatic username formatting (truncates >15 chars)")
             print("\n📡 Bot is ready...")
             print("   Ctrl+C to stop\n")
             
@@ -893,26 +789,8 @@ class EscrowBot:
         os.makedirs('config', exist_ok=True)
         os.makedirs('data', exist_ok=True)
         
-        # Create default config if it doesn't exist
-        if not os.path.exists(PFP_CONFIG_PATH):
-            default_config = {
-                "BUYER_PFP": {
-                    "center_x": 470,
-                    "center_y": 384,
-                    "radius": 177
-                },
-                "SELLER_PFP": {
-                    "center_x": 920,
-                    "center_y": 384,
-                    "radius": 177
-                }
-            }
-            with open(PFP_CONFIG_PATH, 'w') as f:
-                json.dump(default_config, f, indent=2)
-            print(f"✅ Created default config at {PFP_CONFIG_PATH}")
-        
         # Check required assets
-        required_assets = [BASE_START_IMAGE, UNKNOWN_PFP]
+        required_assets = [BASE_START_IMAGE, PFP_TEMPLATE, UNKNOWN_PFP]
         
         for asset in required_assets:
             if not os.path.exists(asset):
@@ -924,75 +802,17 @@ class EscrowBot:
                     img.save(UNKNOWN_PFP)
                     print(f"   Created {UNKNOWN_PFP}")
                 elif asset == BASE_START_IMAGE:
-                    print("   Creating base_start.png template...")
-                    self.create_base_template()
+                    print(f"   Please add {BASE_START_IMAGE} for /begin preview")
+                elif asset == PFP_TEMPLATE:
+                    print(f"   Please add {PFP_TEMPLATE} for final PFP logo")
         
-        # Check logo templates
-        if not os.path.exists(P2P_FINAL_IMAGE):
-            print(f"⚠️  P2P logo template missing: {P2P_FINAL_IMAGE}")
-            print("   Please add p2p_logo_template.png to assets folder")
-        
-        if not os.path.exists(OTC_FINAL_IMAGE):
-            print(f"⚠️  OTC logo template missing: {OTC_FINAL_IMAGE}")
-            print("   Please add otc_logo_template.png to assets folder")
+        # Check font
+        font_path = "assets/Skynight.otf"
+        if not os.path.exists(font_path):
+            print(f"⚠️  Font file missing: {font_path}")
+            print("   PFP logos will use default font")
         
         print("✅ Asset check complete\n")
-    
-    def create_base_template(self):
-        """Create a base template image with circles"""
-        try:
-            # Create a 1400x800 blue gradient base image
-            width, height = 1400, 800
-            base_img = Image.new('RGBA', (width, height), (0, 40, 85))
-            draw = ImageDraw.Draw(base_img)
-            
-            # Draw two circles where profile pictures will go
-            # Buyer circle (left)
-            buyer_x, buyer_y = 470, 384
-            buyer_radius = 177
-            draw.ellipse(
-                [(buyer_x - buyer_radius, buyer_y - buyer_radius),
-                 (buyer_x + buyer_radius, buyer_y + buyer_radius)],
-                outline=(255, 255, 255),
-                width=5
-            )
-            
-            # Seller circle (right)
-            seller_x, seller_y = 920, 384
-            seller_radius = 177
-            draw.ellipse(
-                [(seller_x - seller_radius, seller_y - seller_radius),
-                 (seller_x + seller_radius, seller_y + seller_radius)],
-                outline=(255, 255, 255),
-                width=5
-            )
-            
-            # Add title
-            try:
-                font = ImageFont.truetype("arial.ttf", 60)
-            except:
-                font = ImageFont.load_default()
-            
-            draw.text((width // 2, 150), "ESCROW SESSION", 
-                     fill=(255, 255, 255), font=font, anchor="mm")
-            
-            # Add labels
-            try:
-                label_font = ImageFont.truetype("arial.ttf", 40)
-            except:
-                label_font = font
-            
-            draw.text((buyer_x, buyer_y + buyer_radius + 50), "BUYER", 
-                     fill=(200, 200, 255), font=label_font, anchor="mt")
-            draw.text((seller_x, seller_y + seller_radius + 50), "SELLER", 
-                     fill=(255, 200, 200), font=label_font, anchor="mt")
-            
-            # Save it
-            base_img.save(BASE_START_IMAGE)
-            print(f"✅ Created base template at {BASE_START_IMAGE}")
-            
-        except Exception as e:
-            print(f"[ERROR] Creating base template: {e}")
 
 def main():
     """Main function"""
