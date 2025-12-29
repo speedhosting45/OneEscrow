@@ -409,6 +409,59 @@ class EscrowBot:
             except:
                 pass
     
+    async def get_group_owner_id(self, chat):
+        """Get the Telegram user ID of the group owner/creator"""
+        try:
+            # Method 1: Check admin participants for creator flag
+            try:
+                participants = await self.client.get_participants(
+                    chat, 
+                    filter=types.ChannelParticipantsAdmins()
+                )
+                
+                for participant in participants:
+                    if hasattr(participant, 'participant'):
+                        # Check if this is the creator
+                        if hasattr(participant.participant, 'creator'):
+                            if participant.participant.creator:
+                                return participant.id
+                        # Check for admin rights that indicate creator
+                        elif hasattr(participant.participant, 'admin_rights'):
+                            rights = participant.participant.admin_rights
+                            if rights and hasattr(rights, 'other'):
+                                # Creator usually has all rights
+                                if rights.other and rights.post_messages:
+                                    return participant.id
+            except:
+                pass
+            
+            # Method 2: Check full chat info
+            try:
+                if hasattr(chat, 'megagroup') and chat.megagroup:
+                    full_chat = await self.client(
+                        functions.channels.GetFullChannelRequest(chat)
+                    )
+                    if hasattr(full_chat, 'full_chat') and hasattr(full_chat.full_chat, 'creator_id'):
+                        return full_chat.full_chat.creator_id
+            except:
+                pass
+            
+            # Method 3: Get chat creator from get_permissions
+            try:
+                perms = await self.client.get_permissions(chat, await self.client.get_me())
+                if hasattr(perms, 'creator') and perms.creator:
+                    # If bot is creator (shouldn't happen), return None
+                    pass
+            except:
+                pass
+            
+            print(f"[DEBUG] Could not determine group owner for chat {chat.id}")
+            return None
+            
+        except Exception as e:
+            print(f"[ERROR] Getting group owner: {e}")
+            return None
+    
     async def handle_begin_command(self, event):
         """Handle /begin command - Create merged photo and show role buttons"""
         try:
@@ -458,22 +511,31 @@ class EscrowBot:
                     pass
                 return
             
-            # Get participants (EXCLUDE ONLY BOT - ALLOW CREATOR!)
+            # Get participants - EXCLUDE BOT AND GROUP OWNER
             try:
                 participants = await self.client.get_participants(chat)
                 eligible_users = []
                 
                 bot_id = (await self.client.get_me()).id
                 
+                # Get group owner ID
+                group_owner_id = await self.get_group_owner_id(chat)
+                
                 print(f"[BEGIN] Total participants: {len(participants)}")
                 print(f"[BEGIN] Bot ID: {bot_id}")
+                print(f"[BEGIN] Group Owner ID: {group_owner_id}")
                 
                 for participant in participants:
                     participant_id = participant.id
                     
-                    # Skip bot ONLY
+                    # Skip bot
                     if participant_id == bot_id:
                         print(f"[BEGIN] Skipping bot: {participant_id}")
+                        continue
+                    
+                    # Skip group owner
+                    if group_owner_id and participant_id == group_owner_id:
+                        print(f"[BEGIN] Skipping group owner: {participant_id}")
                         continue
                     
                     # Check if it's a bot account
@@ -481,14 +543,14 @@ class EscrowBot:
                         print(f"[BEGIN] Skipping bot account: {participant_id}")
                         continue
                     
-                    # Add ALL users (including creator!) as eligible
+                    # Add user as eligible (not bot, not owner)
                     eligible_users.append(participant)
-                    print(f"[BEGIN] Added user: ID={participant_id}, Name={get_user_display(participant)}")
+                    print(f"[BEGIN] Added eligible user: ID={participant_id}, Name={get_user_display(participant)}")
                 
                 member_count = len(eligible_users)
-                print(f"[BEGIN] Found {member_count} eligible users (excluding bot only)")
+                print(f"[BEGIN] Found {member_count} eligible users (excluding bot and group owner)")
                 
-                # Need exactly 2 eligible users
+                # Need exactly 2 eligible users (for buyer and seller)
                 if member_count != 2:
                     try:
                         message = INSUFFICIENT_MEMBERS_MESSAGE.format(current_count=member_count)
@@ -499,6 +561,7 @@ class EscrowBot:
                 
                 # Update members
                 group_data["members"] = [u.id for u in eligible_users]
+                group_data["group_owner_id"] = group_owner_id  # Store owner ID for reference
                 groups[group_key] = group_data
                 save_groups(groups)
                 
@@ -568,6 +631,8 @@ class EscrowBot:
                 
             except Exception as e:
                 print(f"[ERROR] /begin: {e}")
+                import traceback
+                traceback.print_exc()
                 try:
                     await event.reply(f"❌ Error: {str(e)[:100]}", parse_mode='html')
                 except:
@@ -575,6 +640,8 @@ class EscrowBot:
             
         except Exception as e:
             print(f"[ERROR] Handling /begin: {e}")
+            import traceback
+            traceback.print_exc()
     
     async def handle_role_selection(self, event):
         """Handle role selection - Generate final PFP logo and update group photo"""
@@ -632,8 +699,16 @@ class EscrowBot:
                 await event.answer("❌ Bot cannot select roles", alert=True)
                 return
             
+            # Check if this user is the group owner
+            group_data = groups.get(group_id, {})
+            group_owner_id = group_data.get("group_owner_id")
+            
+            if group_owner_id and sender.id == group_owner_id:
+                await event.answer("❌ Group owner cannot select roles", alert=True)
+                return
+            
             # Check if this user is one of the 2 eligible users
-            eligible_user_ids = groups[group_id].get("members", [])
+            eligible_user_ids = group_data.get("members", [])
             if sender.id not in eligible_user_ids:
                 await event.answer("❌ You are not an eligible participant for this session", alert=True)
                 return
@@ -688,6 +763,8 @@ class EscrowBot:
                 
         except Exception as e:
             print(f"[ERROR] Role selection: {e}")
+            import traceback
+            traceback.print_exc()
             await event.answer("❌ Error selecting role", alert=True)
     
     async def generate_final_pfp_logo(self, chat, group_id, user_roles):
