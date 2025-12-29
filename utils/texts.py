@@ -23,100 +23,112 @@ All escrows operate within private, bot-moderated groups.
 # Address Handler Messages - Professional Style
 
 BUYER_ADDRESS_PROMPT = """
-𝘗𝘶𝘳𝘤𝘩𝘢𝘴𝘦𝘳 𝘚𝘦𝘵𝘵𝘭𝘦𝘮𝘦𝘯𝘵 𝘈𝘥𝘥𝘳𝘦𝘴𝘴
+<b>Settlement Address: Buyer</b>
 
-Format: <code>/buyer wallet_address</code>
+Please submit the wallet address for settlement.
 
-<blockquote>Example: /buyer 0x742d35Cc6634C0532925a3b844Bc9e0E0F14eC73</blockquote>
+<b>Command:</b>
+<code>/buyer wallet_address</code>
+
+<blockquote><b>Example:</b>
+<code>/buyer 0x742d35Cc6634C0532925a3b844Bc9e0E0F14eC73</code></blockquote>
 """
 
 SELLER_ADDRESS_PROMPT = """
-𝘗𝘳𝘰𝘷𝘪𝘥𝘦𝘳 𝘚𝘦𝘵𝘵𝘭𝘦𝘮𝘦𝘯𝘵 𝘈𝘥𝘥𝘳𝘦𝘴𝘴
+<b>Settlement Address: Seller</b>
 
-Format: <code>/seller wallet_address</code>
+Please submit the wallet address for settlement.
 
-<blockquote>Example: /seller TQrY8tryqsYVCYS3MFbtffiPp2ccyn4STm</blockquote>
+<b>Command:</b>
+<code>/seller wallet_address</code>
+
+<blockquote><b>Example:</b>
+<code>/seller TQrY8tryqsYVCYS3MFbtffiPp2ccyn4STm</code></blockquote>
 """
 
 ADDRESS_SAVED = """
-𝘈𝘥𝘥𝘳𝘦𝘴𝘴 𝘙𝘦𝘨𝘪𝘴𝘵𝘳𝘢𝘵𝘪𝘰𝘯 𝘊𝘰𝘯𝘧𝘪𝘳𝘮𝘦𝘥
+<b>Configuration Updated</b>
 
-<b>Role:</b> {role}
-<b>Network:</b> {chain}
-<b>Participant:</b> {user_mention}
+The settlement address has been successfully recorded.
+
+<b>Details:</b>
+• Role: {role}
+• Network: {chain}
+• User: {user_mention}
 
 <code>{address}</code>
-
-<blockquote>Settlement address recorded for transaction execution</blockquote>
 """
 
 ADDRESSES_VIEW = """
-𝘚𝘦𝘵𝘵𝘭𝘦𝘮𝘦𝘯𝘵 𝘊𝘰𝘯𝘧𝘪𝘨𝘶𝘳𝘢𝘵𝘪𝘰𝘯
+<b>Transaction Configuration</b>
 
-<b>Purchasing Party</b>
-• Participant: {buyer_mention}
-• Network: {buyer_chain}
+<b>Buyer (Purchaser)</b>
+User: {buyer_mention}
+Network: {buyer_chain}
 <code>{buyer_address}</code>
 
-<b>Provisioning Party</b>
-• Participant: {seller_mention}
-• Network: {seller_chain}
+<b>Seller (Provider)</b>
+User: {seller_mention}
+Network: {seller_chain}
 <code>{seller_address}</code>
 
-<blockquote>Protocol Environment: {group_name}</blockquote>
+<blockquote><b>Session ID:</b> {group_name}</blockquote>
 """
 
 INVALID_ADDRESS = """
-𝘈𝘥𝘥𝘳𝘦𝘴𝘴 𝘝𝘢𝘭𝘪𝘥𝘢𝘵𝘪𝘰𝘯 𝘍𝘢𝘪𝘭𝘦𝘥
+<b>Validation Error</b>
 
+The address provided does not match the required format.
 <code>{address}</code>
 
-<blockquote>Standard format requirements:
-• USDT BEP20: 42 hexadecimal characters (0x...)
-• USDT TRC20: 34 base58 characters (T...)
-• BTC: Legacy (1...), SegWit (3...), Native SegWit (bc1...)
-• ETH/ERC20: 42 hexadecimal characters (0x...)
-• LTC: Legacy (L...), SegWit (M...), Native SegWit (ltc1...)</blockquote>
+<blockquote><b>Required Formats:</b>
+• <b>ERC20/BEP20:</b> 42 hexadecimal characters (0x...)
+• <b>TRC20:</b> 34 characters starting with 'T'
+• <b>BTC:</b> Legacy (1...), SegWit (3...), or Native (bc1...)</blockquote>
 """
 
 NO_ROLE = """
-𝘊𝘰𝘯𝘵𝘳𝘢𝘤𝘵𝘶𝘢𝘭 𝘗𝘰𝘴𝘪𝘵𝘪𝘰𝘯 𝘜𝘯𝘢𝘴𝘴𝘪𝘨𝘯𝘦𝘥
+<b>Access Denied</b>
 
-No active role assigned in transaction protocol.
+You do not have an active role in this transaction protocol.
 
-<blockquote>Execute /begin within escrow environment to establish position</blockquote>
+<blockquote><b>Action Required:</b>
+Please execute <code>/begin</code> to initialize your participant status.</blockquote>
 """
 
 ADDRESS_ALREADY_SET = """
-𝘈𝘥𝘥𝘳𝘦𝘴𝘴 𝘊𝘰𝘯𝘧𝘪𝘨𝘶𝘳𝘢𝘵𝘪𝘰𝘯 𝘊𝘰𝘮𝘱𝘭𝘦𝘵𝘦
+<b>Configuration Locked</b>
 
-<b>Role:</b> {role}
+A settlement address is already registered for this role.
+
+<b>Current Entry:</b>
 <code>{address}</code>
 
-<blockquote>Settlement address already registered and immutable</blockquote>
+<blockquote>To modify this, please contact support or reset the session.</blockquote>
 """
 
 NO_ADDRESSES_SET = """
-𝘚𝘦𝘵𝘵𝘭𝘦𝘮𝘦𝘯𝘵 𝘈𝘥𝘥𝘳𝘦𝘴𝘴𝘦𝘴 𝘗𝘦𝘯𝘥𝘪𝘯𝘨
+<b>Pending Configuration</b>
 
-• Purchasing Party: Not configured
-• Provisioning Party: Not configured
+Settlement addresses have not been established.
 
-<blockquote>Configure settlement addresses:
-Purchaser: <code>/buyer address</code>
-Provider: <code>/seller address</code></blockquote>
+<b>Status:</b>
+• Buyer: <b>Pending</b>
+• Seller: <b>Pending</b>
+
+<blockquote><b>Instructions:</b>
+Use <code>/buyer address</code> or <code>/seller address</code> to proceed.</blockquote>
 """
 
 ADDRESS_VERIFICATION_FAILED = """
-𝘕𝘦𝘵𝘸𝘰𝘳𝘬 𝘝𝘦𝘳𝘪𝘧𝘪𝘤𝘢𝘵𝘪𝘰𝘯 𝘜𝘯𝘴𝘶𝘤𝘤𝘦𝘴𝘴𝘧𝘶𝘭
+<b>Network Mismatch</b>
 
-<code>{address}</code> failed validation on {chain} network.
+Verification failed for <b>{chain}</b> network.
 
-<blockquote>• Verify cryptographic format compliance
-• Confirm network compatibility
-• Test with network-specific validator</blockquote>
+<code>{address}</code>
+
+<blockquote>Please ensure the address matches the specific blockchain network selected for this transaction.</blockquote>
 """
-
 P2P_CREATED_MESSAGE = """
 𝘗2𝘗 𝘌𝘴𝘤𝘳𝘰𝘸 𝘌𝘴𝘵𝘢𝘣𝘭𝘪𝘴𝘩𝘦𝘥
 
