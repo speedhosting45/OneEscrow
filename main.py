@@ -23,16 +23,17 @@ from handlers.create import handle_create, handle_create_p2p, handle_create_othe
 from handlers.stats import handle_stats
 from handlers.about import handle_about
 from handlers.help import handle_help
-from handlers.addresses import setup_address_handlers  # NEW: Address handlers
+from handlers.addresses import setup_address_handlers
 
 # Import utilities
 from utils.texts import (
     START_MESSAGE, CREATE_MESSAGE, P2P_CREATED_MESSAGE, OTHER_CREATED_MESSAGE,
     WELCOME_MESSAGE, SESSION_INITIATED_MESSAGE, INSUFFICIENT_MEMBERS_MESSAGE,
     SESSION_ALREADY_INITIATED_MESSAGE, GROUP_NOT_FOUND_MESSAGE,
-    MERGED_PHOTO_CAPTION, PARTICIPANTS_CONFIRMED_MESSAGE
+    MERGED_PHOTO_CAPTION, FINAL_PHOTO_CAPTION, PARTICIPANTS_CONFIRMED_MESSAGE
 )
 from utils.buttons import get_main_menu_buttons, get_session_buttons
+from utils.blacklist import is_blacklisted, add_to_blacklist, load_blacklist
 
 # Setup logging
 logging.basicConfig(
@@ -384,7 +385,7 @@ class EscrowBot:
         async def role_handler(event):
             await self.handle_role_selection(event)
         
-        # Setup address handlers (NEW)
+        # Setup address handlers
         setup_address_handlers(self.client)
         
         # Delete system messages only
@@ -515,7 +516,7 @@ class EscrowBot:
                     pass
                 return
             
-            # Get participants - EXCLUDE BOT AND GROUP OWNER
+            # Get participants - EXCLUDE BOT, GROUP OWNER, AND BLACKLISTED USERS
             try:
                 participants = await self.client.get_participants(chat)
                 eligible_users = []
@@ -547,12 +548,18 @@ class EscrowBot:
                         print(f"[BEGIN] Skipping bot account: {participant_id}")
                         continue
                     
-                    # Add user as eligible (not bot, not owner)
+                    # Check if blacklisted
+                    is_blocked, reason = is_blacklisted(participant)
+                    if is_blocked:
+                        print(f"[BEGIN] Skipping blacklisted user: {participant_id} - {reason}")
+                        continue
+                    
+                    # Add user as eligible (not bot, not owner, not blacklisted)
                     eligible_users.append(participant)
                     print(f"[BEGIN] Added eligible user: ID={participant_id}, Name={get_user_display(participant)}")
                 
                 member_count = len(eligible_users)
-                print(f"[BEGIN] Found {member_count} eligible users (excluding bot and group owner)")
+                print(f"[BEGIN] Found {member_count} eligible users (excluding bot, owner, blacklisted)")
                 
                 # Need exactly 2 eligible users (for buyer and seller)
                 if member_count != 2:
@@ -884,6 +891,7 @@ class EscrowBot:
             print("   • PFP logo generation on role confirmation")
             print("   • Role selection system")
             print("   • Address management (/buyer, /seller, /addresses)")
+            print("   • Blacklist system (excludes @alyaassis etc)")
             print("   • Works with users without usernames")
             print("   • User ID display for long/no usernames")
             print("\n📡 Bot is ready...")
