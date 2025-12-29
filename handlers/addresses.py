@@ -77,9 +77,9 @@ class AddressValidator:
     
     # API keys (you can add your own API keys here)
     API_KEYS = {
-        'bscscan': '',  # Add BSCScan API key
-        'etherscan': '',  # Add Etherscan API key
-        'blockcypher': ''  # Add BlockCypher API key
+        'bscscan': 'DFPIRXHE54RBAZP9NIMYE3V5Z5K9U4Y126',  # Add BSCScan API key
+        'etherscan': 'DFPIRXHE54RBAZP9NIMYE3V5Z5K9U4Y126',  # Add Etherscan API key
+        'blockcypher': '7434a8ddf7244987b413e22353d3e266'  # Add BlockCypher API key
     }
     
     @staticmethod
