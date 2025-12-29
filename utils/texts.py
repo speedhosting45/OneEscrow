@@ -20,6 +20,88 @@ CREATE_MESSAGE = """
 
 All escrows operate within private, bot-moderated groups.
 """
+# Add to utils/texts.py
+
+# Address Handler Messages - MINIMAL STYLE
+
+# Command Prompts
+BUYER_ADDRESS_PROMPT = """
+𝘚𝘦𝘵 𝘗𝘶𝘳𝘤𝘩𝘢𝘴𝘦𝘳 𝘈𝘥𝘥𝘳𝘦𝘴𝘴
+
+<code>/buyer address</code>
+
+<blockquote>Example: /buyer 0x742d35Cc6634C0532925a3b844Bc9e0E0F14eC73</blockquote>
+"""
+
+SELLER_ADDRESS_PROMPT = """
+𝘚𝘦𝘵 𝘗𝘳𝘰𝘷𝘪𝘥𝘦𝘳 𝘈𝘥𝘥𝘳𝘦𝘴𝘴
+
+<code>/seller address</code>
+
+<blockquote>Example: /seller TQrY8tryqsYVCYS3MFbtffiPp2ccyn4STm</blockquote>
+"""
+
+# Success Messages
+ADDRESS_SAVED = """
+𝘈𝘥𝘥𝘳𝘦𝘴𝘴 𝘙𝘦𝘨𝘪𝘴𝘵𝘦𝘳𝘦𝘥
+
+<b>Role:</b> {role}
+<b>Network:</b> {chain}
+<b>User:</b> {user_mention}
+
+<code>{address}</code>
+"""
+
+ADDRESSES_VIEW = """
+𝘚𝘦𝘵𝘵𝘭𝘦𝘮𝘦𝘯𝘵 𝘈𝘥𝘥𝘳𝘦𝘴𝘴𝘦𝘴
+
+<b>Purchaser</b>
+• User: {buyer_mention}
+• Network: {buyer_chain}
+<code>{buyer_address}</code>
+
+<b>Provider</b>
+• User: {seller_mention}
+• Network: {seller_chain}
+<code>{seller_address}</code>
+
+<blockquote>Protocol: {group_name}</blockquote>
+"""
+
+# Error Messages
+INVALID_ADRESS = """
+𝘕𝘦𝘵𝘸𝘰𝘳𝘬 𝘝𝘢𝘭𝘪𝘥𝘢𝘵𝘪𝘰𝘯 𝘍𝘢𝘪𝘭𝘦𝘥
+
+<code>{address}</code> rejected by {chain} network.
+
+• Verify cryptographic format
+• Confirm network compatibility
+• Test with alternative address
+"""
+ADDRESS_ALREADY_SET = """
+𝘈𝘥𝘥𝘳𝘦𝘴𝘴 𝘌𝘹𝘪𝘴𝘵𝘴
+
+<b>Role:</b> {role}
+<code>{address}</code>
+
+<blockquote>Contact arbitration for modification</blockquote>
+"""
+
+NO_ROLE = """
+𝘙𝘰𝘭𝘦 𝘕𝘰𝘵 𝘈𝘴𝘴𝘪𝘨𝘯𝘦𝘥
+
+No contractual position assigned in active protocol.
+
+<blockquote>Use /begin within escrow environment</blockquote>
+"""
+
+NO_ADDRESSES_SET = """
+𝘕𝘰 𝘚𝘦𝘵𝘵𝘭𝘦𝘮𝘦𝘯𝘵 𝘈𝘥𝘥𝘳𝘦𝘴𝘴𝘦𝘴
+
+• Purchaser: Not configured
+• Provider: Not configured
+
+<blockquote>Configure with /buyer or /seller</blockquote>
 
 P2P_CREATED_MESSAGE = """
 𝘗2𝘗 𝘌𝘴𝘤𝘳𝘰𝘸 𝘌𝘴𝘵𝘢𝘣𝘭𝘪𝘴𝘩𝘦𝘥
