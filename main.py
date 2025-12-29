@@ -45,7 +45,7 @@ GROUPS_FILE = 'data/active_groups.json'
 USER_ROLES_FILE = 'data/user_roles.json'
 
 # Asset paths
-BASE_START_IMAGE = "assets/base_start.png"  # For /begin preview
+BASE_START_IMAGE = "assets/base_start1.png"  # For /begin preview
 PFP_TEMPLATE = "assets/tg1.png"  # For final group PFP
 UNKNOWN_PFP = "assets/unknown.png"
 PFP_CONFIG_PATH = "config/pfp_config.json"
@@ -77,15 +77,47 @@ def save_user_roles(roles):
         json.dump(roles, f, indent=2)
 
 def get_user_display(user_obj):
-    """Get clean display name for user"""
-    if hasattr(user_obj, 'username') and user_obj.username:
-        return f"@{user_obj.username}"
-    else:
-        name = getattr(user_obj, 'first_name', '') or f"User_{user_obj.id}"
-        if hasattr(user_obj, 'last_name') and user_obj.last_name:
-            name = f"{name} {user_obj.last_name}"
-        name = re.sub(r'[^\w\s@#]', '', name)
-        return name.strip() or f"User_{user_obj.id}"
+    """Get clean display name for user - IMPROVED VERSION"""
+    try:
+        # Get username if exists
+        if hasattr(user_obj, 'username') and user_obj.username:
+            username = user_obj.username.strip()
+            if username:
+                return f"@{username}"
+        
+        # Get first name
+        first_name = getattr(user_obj, 'first_name', '')
+        if first_name:
+            first_name = first_name.strip()
+        
+        # Get last name
+        last_name = getattr(user_obj, 'last_name', '')
+        if last_name:
+            last_name = last_name.strip()
+        
+        # Combine names
+        if first_name and last_name:
+            full_name = f"{first_name} {last_name}"
+        elif first_name:
+            full_name = first_name
+        elif last_name:
+            full_name = last_name
+        else:
+            full_name = f"User_{user_obj.id}"
+        
+        # Clean special characters
+        full_name = re.sub(r'[^\w\s@#\-\.]', '', full_name)
+        full_name = full_name.strip()
+        
+        # If still empty, use user ID
+        if not full_name:
+            full_name = f"User_{user_obj.id}"
+            
+        return full_name
+        
+    except Exception as e:
+        print(f"[ERROR] Getting user display for {getattr(user_obj, 'id', 'unknown')}: {e}")
+        return f"User_{getattr(user_obj, 'id', 'unknown')}"
 
 async def set_group_photo(client, chat, photo_path):
     """Set group/channel photo with fallback methods"""
@@ -426,12 +458,15 @@ class EscrowBot:
                     pass
                 return
             
-            # Get participants (EXCLUDE CREATOR)
+            # Get participants (EXCLUDE CREATOR and USER WHO SENT /begin)
             try:
                 participants = await self.client.get_participants(chat)
                 real_users = []
                 
                 creator_user_id = group_data.get("creator_user_id")
+                begin_sender_id = user.id  # User who sent /begin
+                
+                print(f"[BEGIN] Creator ID: {creator_user_id}, /begin sender ID: {begin_sender_id}")
                 
                 for participant in participants:
                     # Skip bots
@@ -440,35 +475,45 @@ class EscrowBot:
                     
                     # Skip creator
                     if creator_user_id and participant.id == creator_user_id:
+                        print(f"[BEGIN] Skipping creator: {participant.id}")
+                        continue
+                    
+                    # Skip user who sent /begin (if not creator)
+                    if participant.id == begin_sender_id:
+                        print(f"[BEGIN] Skipping /begin sender: {participant.id}")
                         continue
                     
                     real_users.append(participant)
                 
                 member_count = len(real_users)
-                print(f"[BEGIN] Found {member_count} real users (excluding creator)")
+                print(f"[BEGIN] Found {member_count} real users (excluding creator and /begin sender)")
                 
-                # Need exactly 2 users
-                if member_count < 2:
+                # Need at least 1 other user
+                if member_count < 1:
                     try:
-                        message = INSUFFICIENT_MEMBERS_MESSAGE.format(current_count=member_count)
-                        await event.reply(message, parse_mode='html')
+                        await event.reply("❌ Need at least 1 other participant (excluding yourself and creator)", parse_mode='html')
                     except:
                         pass
                     return
                 
-                # Update members
-                group_data["members"] = [u.id for u in real_users]
-                groups[group_key] = group_data
-                save_groups(groups)
+                # If only 1 other user, that's OK (2 total participants: sender + 1 other)
+                # If more than 1, take first 2
+                selected_users = []
                 
-                # Get first 2 users for photo
-                user1, user2 = real_users[0], real_users[1]
+                # Always include the user who sent /begin (as first participant)
+                selected_users.append(user)
+                
+                # Add the first available other user
+                if real_users:
+                    selected_users.append(real_users[0])
+                
+                print(f"[BEGIN] Selected participants: {[get_user_display(u) for u in selected_users]}")
                 
                 # Create merged photo with their profile pictures
                 success, image_bytes, message = await create_merged_photo(
                     self.client, 
-                    user1.id, 
-                    user2.id
+                    selected_users[0].id, 
+                    selected_users[1].id
                 )
                 
                 if success:
@@ -479,14 +524,14 @@ class EscrowBot:
                     
                     # Use text from texts.py
                     caption = MERGED_PHOTO_CAPTION.format(
-                        user1_name=get_user_display(user1),
-                        user2_name=get_user_display(user2)
+                        user1_name=get_user_display(selected_users[0]),
+                        user2_name=get_user_display(selected_users[1])
                     )
                     
                     # Get buttons for role selection
                     buttons = get_session_buttons(group_key)
                     
-                    # Send photo with buttons
+                    # Send photo with buttons (only visible to non-creator users)
                     await self.client.send_file(
                         chat,
                         temp_file,
@@ -514,8 +559,8 @@ class EscrowBot:
                 
                 # Update group
                 group_data["session_initiated"] = True
-                group_data["user1_id"] = user1.id
-                group_data["user2_id"] = user2.id
+                group_data["user1_id"] = selected_users[0].id
+                group_data["user2_id"] = selected_users[1].id
                 groups[group_key] = group_data
                 save_groups(groups)
                 
@@ -579,6 +624,14 @@ class EscrowBot:
             
             if group_id not in groups:
                 await event.answer("❌ Group not found", alert=True)
+                return
+            
+            # Check if creator is trying to select role
+            group_data = groups.get(group_id, {})
+            creator_user_id = group_data.get("creator_user_id")
+            
+            if creator_user_id and sender.id == creator_user_id:
+                await event.answer("❌ Creator cannot select roles", alert=True)
                 return
             
             # Initialize roles
@@ -745,8 +798,8 @@ class EscrowBot:
             print("   • Profile picture preview on /begin")
             print("   • PFP logo generation on role confirmation")
             print("   • Role selection system")
-            print("   • Single group photo update on confirmation")
-            print("   • Automatic username formatting (truncates >15 chars)")
+            print("   • Creator exclusion from role selection")
+            print("   • User ID display for long/no usernames")
             print("\n📡 Bot is ready...")
             print("   Ctrl+C to stop\n")
             
