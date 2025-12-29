@@ -45,7 +45,7 @@ GROUPS_FILE = 'data/active_groups.json'
 USER_ROLES_FILE = 'data/user_roles.json'
 
 # Asset paths
-BASE_START_IMAGE = "assets/base_start.png"  # For /begin preview
+BASE_START_IMAGE = "assets/base_start1.png"  # For /begin preview
 PFP_TEMPLATE = "assets/tg1.png"  # For final group PFP
 UNKNOWN_PFP = "assets/unknown.png"
 PFP_CONFIG_PATH = "config/pfp_config.json"
@@ -634,88 +634,87 @@ class EscrowBot:
             await event.answer("❌ Error selecting role", alert=True)
     
     async def generate_final_pfp_logo(self, chat, group_id, user_roles):
-    """Generate final PFP logo and update group photo - ONLY CALLED ONCE!"""
-    try:
-        # Find buyer and seller
-        buyer = None
-        seller = None
-        
-        for user_id, data in user_roles.items():
-            if data.get("role") == "buyer" and not buyer:
-                buyer = data
-            elif data.get("role") == "seller" and not seller:
-                seller = data
-        
-        if not buyer or not seller:
-            return
-        
-        # Get group type from stored data
-        groups = load_groups()
-        group_data = groups.get(group_id, {})
-        group_type = group_data.get("type", "p2p")
-        group_type_display = "P2P" if group_type == "p2p" else "OTC"
-        
-        print(f"[PFP] Generating final logo for {group_type_display} escrow")
-        
-        # Use PFPGenerator to create logo
-        from utils.pfpgen import PFPGenerator
-        
-        # Initialize PFP generator
-        pfp_gen = PFPGenerator(template_path=PFP_TEMPLATE)
-        
-        # Generate logo with formatted usernames
-        success, image_bytes, message = pfp_gen.generate_logo(
-            buyer_username=buyer['name'],
-            buyer_user_id=buyer['user_id'],
-            seller_username=seller['name'],
-            seller_user_id=seller['user_id']
-        )
-        
-        if success:
-            try:
-                # Save to temporary file
-                temp_file = f"temp_final_pfp_{group_type}.png"
-                with open(temp_file, "wb") as f:
-                    f.write(image_bytes.getvalue())
-                
-                # UPDATE GROUP PHOTO (ONLY THIS ONE TIME!)
-                await set_group_photo(self.client, chat, temp_file)
-                
-                # DON'T send the image as a message - just update group photo silently
-                
-                # Clean up
+        """Generate final PFP logo and update group photo - ONLY CALLED ONCE!"""
+        try:
+            # Find buyer and seller
+            buyer = None
+            seller = None
+            
+            for user_id, data in user_roles.items():
+                if data.get("role") == "buyer" and not buyer:
+                    buyer = data
+                elif data.get("role") == "seller" and not seller:
+                    seller = data
+            
+            if not buyer or not seller:
+                return
+            
+            # Get group type from stored data
+            groups = load_groups()
+            group_data = groups.get(group_id, {})
+            group_type = group_data.get("type", "p2p")
+            group_type_display = "P2P" if group_type == "p2p" else "OTC"
+            
+            print(f"[PFP] Generating final logo for {group_type_display} escrow")
+            
+            # Use PFPGenerator to create logo
+            from utils.pfpgen import PFPGenerator
+            
+            # Initialize PFP generator
+            pfp_gen = PFPGenerator(template_path=PFP_TEMPLATE)
+            
+            # Generate logo with formatted usernames
+            success, image_bytes, message = pfp_gen.generate_logo(
+                buyer_username=buyer['name'],
+                buyer_user_id=buyer['user_id'],
+                seller_username=seller['name'],
+                seller_user_id=seller['user_id']
+            )
+            
+            if success:
                 try:
-                    os.remove(temp_file)
-                except:
-                    pass
-                
-                print(f"[PFP] Final {group_type_display} PFP logo updated!")
-                
-            except Exception as e:
-                print(f"[ERROR] Could not update final group photo: {e}")
-                # Silently fail - don't send any message to chat
-        else:
-            print(f"[ERROR] Failed to create final PFP logo: {message}")
-        
-        # Send final confirmation message (text only)
-        message_text = PARTICIPANTS_CONFIRMED_MESSAGE.format(
-            group_type_display=group_type_display,
-            buyer_name=buyer['name'],
-            seller_name=seller['name']
-        )
-        
-        await self.client.send_message(
-            chat,
-            message_text,
-            parse_mode='html'
-        )
-        
-        print(f"[SETUP] {group_type_display} escrow finalized: {buyer['name']} ↔ {seller['name']}")
-        
-    except Exception as e:
-        print(f"[ERROR] Generating final PFP logo: {e}")
-        import traceback
-        traceback.print_exc()
+                    # Save to temporary file
+                    temp_file = f"temp_final_pfp_{group_type}.png"
+                    with open(temp_file, "wb") as f:
+                        f.write(image_bytes.getvalue())
+                    
+                    # UPDATE GROUP PHOTO (ONLY THIS ONE TIME!)
+                    await set_group_photo(self.client, chat, temp_file)
+                    
+                    # Clean up
+                    try:
+                        os.remove(temp_file)
+                    except:
+                        pass
+                    
+                    print(f"[PFP] Final {group_type_display} PFP logo updated!")
+                    
+                except Exception as e:
+                    print(f"[ERROR] Could not update final group photo: {e}")
+                    # Silently fail - don't send any message to chat
+            else:
+                print(f"[ERROR] Failed to create final PFP logo: {message}")
+            
+            # Send final confirmation message
+            message_text = PARTICIPANTS_CONFIRMED_MESSAGE.format(
+                group_type_display=group_type_display,
+                buyer_name=buyer['name'],
+                seller_name=seller['name']
+            )
+            
+            await self.client.send_message(
+                chat,
+                message_text,
+                parse_mode='html'
+            )
+            
+            print(f"[SETUP] {group_type_display} escrow finalized: {buyer['name']} ↔ {seller['name']}")
+            
+        except Exception as e:
+            print(f"[ERROR] Generating final PFP logo: {e}")
+            import traceback
+            traceback.print_exc()
+
     async def run(self):
         """Run the bot"""
         try:
