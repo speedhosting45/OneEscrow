@@ -50,21 +50,30 @@ class PFPGenerator:
         except Exception as e:
             return False, f"❌ Failed to load resources: {e}"
     
-    def format_username(self, username, user_id):
-        """Format username - if >15 chars, use user ID"""
-        if len(username) > 15:
-            # Use user ID if username is too long
+    def format_display_name(self, username, user_id):
+        """
+        Format display name for PFP logo
+        - If username > 15 chars: Show user ID
+        - If no username: Show "User_[ID]" 
+        """
+        if not username or username.strip() == "":
+            # No username, show user ID
+            return f"User_{user_id}"
+        elif len(username) > 15:
+            # Username too long, show user ID
             return f"ID: {user_id}"
-        return username
+        else:
+            # Username is fine
+            return username
     
     def generate_logo(self, buyer_username, buyer_user_id, seller_username, seller_user_id):
         """
-        Generate logo with formatted usernames
+        Generate logo with formatted display names
         
         Args:
-            buyer_username: Buyer display name
+            buyer_username: Buyer display name (could be empty)
             buyer_user_id: Buyer Telegram ID
-            seller_username: Seller display name  
+            seller_username: Seller display name (could be empty)  
             seller_user_id: Seller Telegram ID
             
         Returns:
@@ -86,9 +95,12 @@ class PFPGenerator:
             seller_x = self.config["SELLER"]["start_x"]
             seller_y = self.config["SELLER"]["start_y"]
             
-            # Format usernames
-            buyer_display = self.format_username(buyer_username, buyer_user_id)
-            seller_display = self.format_username(seller_username, seller_user_id)
+            # Format display names
+            buyer_display = self.format_display_name(buyer_username, buyer_user_id)
+            seller_display = self.format_display_name(seller_username, seller_user_id)
+            
+            print(f"[PFPGEN] Buyer display: {buyer_display}")
+            print(f"[PFPGEN] Seller display: {seller_display}")
             
             # Draw text with baseline fix
             draw.text(
