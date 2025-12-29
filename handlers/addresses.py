@@ -7,6 +7,7 @@ import re
 import json
 import os
 import logging
+import time
 import asyncio
 import aiohttp
 from telethon import events
@@ -74,6 +75,13 @@ class AddressValidator:
         ]
     }
     
+    # API keys (you can add your own API keys here)
+    API_KEYS = {
+        'bscscan': '',  # Add BSCScan API key
+        'etherscan': '',  # Add Etherscan API key
+        'blockcypher': ''  # Add BlockCypher API key
+    }
+    
     @staticmethod
     def validate_address(address: str) -> tuple:
         """Validate address and return (is_valid, chain)"""
@@ -109,53 +117,68 @@ class AddressValidator:
         try:
             # Map chains to API endpoints
             apis = {
-                'USDT (BEP20)': f'https://api.bscscan.com/api?module=account&action=balance&address={address}',
-                'USDT (TRC20)': f'https://apilist.tronscan.org/api/account?address={address}',
-                'ETH': f'https://api.etherscan.io/api?module=account&action=balance&address={address}',
-                'BTC': f'https://blockchain.info/balance?active={address}',
-                'LTC': f'https://api.blockcypher.com/v1/ltc/main/addrs/{address}/balance',
+                'USDT (BEP20)': {
+                    'url': f'https://api.bscscan.com/api?module=account&action=balance&address={address}&tag=latest',
+                    'check': lambda data: data.get('status') == '1' and data.get('message') == 'OK'
+                },
+                'USDT (TRC20)': {
+                    'url': f'https://apilist.tronscan.org/api/account?address={address}',
+                    'check': lambda data: 'data' in data or 'balance' in data
+                },
+                'ETH': {
+                    'url': f'https://api.etherscan.io/api?module=account&action=balance&address={address}&tag=latest',
+                    'check': lambda data: data.get('status') == '1' and data.get('message') == 'OK'
+                },
+                'BTC': {
+                    'url': f'https://blockchain.info/balance?active={address}',
+                    'check': lambda data: bool(data) and address in data
+                },
+                'LTC': {
+                    'url': f'https://api.blockcypher.com/v1/ltc/main/addrs/{address}/balance',
+                    'check': lambda data: 'balance' in data or 'address' in data
+                }
             }
             
             if chain not in apis:
-                return True  # Skip verification for unsupported chains
+                logger.warning(f"No API configured for chain: {chain}")
+                return True  # Skip verification if no API
+            
+            api_config = apis[chain]
+            url = api_config['url']
+            
+            # Add API keys if available
+            if chain == 'USDT (BEP20)' and AddressValidator.API_KEYS['bscscan']:
+                url += f"&apikey={AddressValidator.API_KEYS['bscscan']}"
+            elif chain == 'ETH' and AddressValidator.API_KEYS['etherscan']:
+                url += f"&apikey={AddressValidator.API_KEYS['etherscan']}"
             
             async with aiohttp.ClientSession() as session:
-                async with session.get(apis[chain], timeout=10) as response:
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+                
+                async with session.get(url, headers=headers, timeout=15) as response:
                     if response.status == 200:
                         data = await response.json()
-                        
-                        # Check response formats
-                        if chain == 'USDT (BEP20)':
-                            return data.get('status') == '1'
-                        elif chain == 'USDT (TRC20)':
-                            return 'balance' in data
-                        elif chain == 'ETH':
-                            return data.get('status') == '1'
-                        elif chain == 'BTC':
-                            return bool(data)
-                        elif chain == 'LTC':
-                            return 'balance' in data
+                        logger.info(f"API response for {chain}: {data}")
+                        return api_config['check'](data)
+                    else:
+                        logger.error(f"API error {response.status} for {chain}: {await response.text()}")
+                        return False
             
             return False
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout verifying {chain} address: {address}")
+            return False  # Timeout - reject address
         except Exception as e:
-            logger.error(f"Blockchain verification failed: {e}")
+            logger.error(f"Blockchain verification failed for {chain}: {e}")
             return False  # If verification fails, reject address
 
 async def handle_buyer_address(event, client):
-    """Handle /buyer command"""
+    """Handle /buyer command - SEND RESPONSE IN GROUP"""
     try:
         user = await event.get_sender()
         chat = await event.get_chat()
-        
-        # Check if in private chat
-        if not event.is_private:
-            await event.delete()
-            await client.send_message(
-                user.id,
-                BUYER_ADDRESS_PROMPT,
-                parse_mode='html'
-            )
-            return
         
         # Get address from command
         text = event.text.strip()
@@ -228,7 +251,7 @@ async def handle_buyer_address(event, client):
         }
         save_addresses(addresses)
         
-        # Send confirmation
+        # Send confirmation IN THE GROUP
         await event.reply(
             ADDRESS_SAVED.format(
                 role='Buyer',
@@ -246,20 +269,10 @@ async def handle_buyer_address(event, client):
         await event.reply("❌ Error saving address", parse_mode='html')
 
 async def handle_seller_address(event, client):
-    """Handle /seller command"""
+    """Handle /seller command - SEND RESPONSE IN GROUP"""
     try:
         user = await event.get_sender()
         chat = await event.get_chat()
-        
-        # Check if in private chat
-        if not event.is_private:
-            await event.delete()
-            await client.send_message(
-                user.id,
-                SELLER_ADDRESS_PROMPT,
-                parse_mode='html'
-            )
-            return
         
         # Get address from command
         text = event.text.strip()
@@ -332,7 +345,7 @@ async def handle_seller_address(event, client):
         }
         save_addresses(addresses)
         
-        # Send confirmation
+        # Send confirmation IN THE GROUP
         await event.reply(
             ADDRESS_SAVED.format(
                 role='Seller',
@@ -361,7 +374,6 @@ async def handle_view_addresses(event, client):
         groups = load_groups()
         
         user_group_id = None
-        user_role_data = None
         
         for group_id, role_data in roles.items():
             for uid in role_data:
@@ -414,7 +426,7 @@ async def handle_view_addresses(event, client):
         await event.reply("❌ Error viewing addresses", parse_mode='html')
 
 def setup_address_handlers(client):
-    """Setup address command handlers"""
+    """Setup address command handlers - DON'T DELETE COMMANDS"""
     
     @client.on(events.NewMessage(pattern=r'^/buyer(\s|$)'))
     async def buyer_handler(event):
@@ -428,4 +440,4 @@ def setup_address_handlers(client):
     async def addresses_handler(event):
         await handle_view_addresses(event, client)
     
-    logger.info("Address handlers setup complete")
+    logger.info("✅ Address handlers setup complete - Commands will not be deleted")
