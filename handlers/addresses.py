@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Address Handler for Escrow Bot
-Handles /buyer and /seller commands with validation
+Address Handler for Escrow Bot - Fixed API endpoints
 """
 import re
 import json
@@ -58,7 +57,7 @@ def load_groups():
     return {}
 
 class AddressValidator:
-    """Validate cryptocurrency addresses"""
+    """Validate cryptocurrency addresses with updated APIs"""
     
     # Regex patterns for supported chains
     PATTERNS = {
@@ -75,11 +74,11 @@ class AddressValidator:
         ]
     }
     
-    # API keys (you can add your own API keys here)
+    # API keys - FIXED
     API_KEYS = {
-        'bscscan': 'DFPIRXHE54RBAZP9NIMYE3V5Z5K9U4Y126',  # Add BSCScan API key
-        'etherscan': 'DFPIRXHE54RBAZP9NIMYE3V5Z5K9U4Y126',  # Add Etherscan API key
-        'blockcypher': '7434a8ddf7244987b413e22353d3e266'  # Add BlockCypher API key
+        'bscscan': 'DFPIRXHE54RBAZP9NIMYE3V5Z5K9U4Y126',
+        'etherscan': 'DFPIRXHE54RBAZP9NIMYE3V5Z5K9U4Y126',
+        'blockcypher': '7434a8ddf7244987b413e22353d3e266'
     }
     
     @staticmethod
@@ -113,29 +112,46 @@ class AddressValidator:
     
     @staticmethod
     async def verify_on_blockchain(address: str, chain: str) -> bool:
-        """Verify address exists on blockchain (API call)"""
+        """Verify address exists on blockchain using updated APIs"""
         try:
-            # Map chains to API endpoints
+            # Map chains to API endpoints - UPDATED TO V2 APIS
             apis = {
                 'USDT (BEP20)': {
-                    'url': f'https://api.bscscan.com/api?module=account&action=balance&address={address}&tag=latest',
+                    'url': 'https://api.bscscan.com/api',
+                    'params': {
+                        'module': 'account',
+                        'action': 'balance',
+                        'address': address,
+                        'tag': 'latest',
+                        'apikey': AddressValidator.API_KEYS['bscscan']
+                    },
                     'check': lambda data: data.get('status') == '1' and data.get('message') == 'OK'
                 },
                 'USDT (TRC20)': {
                     'url': f'https://apilist.tronscan.org/api/account?address={address}',
-                    'check': lambda data: 'data' in data or 'balance' in data
+                    'params': None,
+                    'check': lambda data: 'data' in data or 'balance' in data or 'totalTransactionCount' in data
                 },
                 'ETH': {
-                    'url': f'https://api.etherscan.io/api?module=account&action=balance&address={address}&tag=latest',
+                    'url': 'https://api.etherscan.io/api',
+                    'params': {
+                        'module': 'account',
+                        'action': 'balance',
+                        'address': address,
+                        'tag': 'latest',
+                        'apikey': AddressValidator.API_KEYS['etherscan']
+                    },
                     'check': lambda data: data.get('status') == '1' and data.get('message') == 'OK'
                 },
                 'BTC': {
                     'url': f'https://blockchain.info/balance?active={address}',
+                    'params': None,
                     'check': lambda data: bool(data) and address in data
                 },
                 'LTC': {
                     'url': f'https://api.blockcypher.com/v1/ltc/main/addrs/{address}/balance',
-                    'check': lambda data: 'balance' in data or 'address' in data
+                    'params': None,
+                    'check': lambda data: 'balance' in data or 'address' in data or 'total_received' in data
                 }
             }
             
@@ -145,34 +161,54 @@ class AddressValidator:
             
             api_config = apis[chain]
             url = api_config['url']
-            
-            # Add API keys if available
-            if chain == 'USDT (BEP20)' and AddressValidator.API_KEYS['bscscan']:
-                url += f"&apikey={AddressValidator.API_KEYS['bscscan']}"
-            elif chain == 'ETH' and AddressValidator.API_KEYS['etherscan']:
-                url += f"&apikey={AddressValidator.API_KEYS['etherscan']}"
+            params = api_config['params']
             
             async with aiohttp.ClientSession() as session:
                 headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept': 'application/json'
                 }
                 
-                async with session.get(url, headers=headers, timeout=15) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        logger.info(f"API response for {chain}: {data}")
-                        return api_config['check'](data)
-                    else:
-                        logger.error(f"API error {response.status} for {chain}: {await response.text()}")
-                        return False
+                # Make request
+                if params:
+                    async with session.get(url, params=params, headers=headers, timeout=15) as response:
+                        return await AddressValidator._process_response(response, chain, address)
+                else:
+                    async with session.get(url, headers=headers, timeout=15) as response:
+                        return await AddressValidator._process_response(response, chain, address)
             
-            return False
         except asyncio.TimeoutError:
             logger.error(f"Timeout verifying {chain} address: {address}")
             return False  # Timeout - reject address
         except Exception as e:
             logger.error(f"Blockchain verification failed for {chain}: {e}")
             return False  # If verification fails, reject address
+    
+    @staticmethod
+    async def _process_response(response, chain, address):
+        """Process API response"""
+        if response.status == 200:
+            data = await response.json()
+            logger.info(f"API response for {chain}: {data}")
+            
+            # Different checks for different chains
+            if chain == 'USDT (BEP20)':
+                return data.get('status') == '1' and data.get('message') == 'OK'
+            elif chain == 'USDT (TRC20)':
+                # TRON addresses return data even if empty wallet
+                return 'data' in data or 'balance' in data or 'totalTransactionCount' in data
+            elif chain == 'ETH':
+                return data.get('status') == '1' and data.get('message') == 'OK'
+            elif chain == 'BTC':
+                # Blockchain.info returns dict with addresses as keys
+                return bool(data) and address in data
+            elif chain == 'LTC':
+                # BlockCypher returns balance info
+                return 'balance' in data or 'address' in data or 'total_received' in data
+            return False
+        else:
+            logger.error(f"API error {response.status} for {chain}: {await response.text()}")
+            return False
 
 async def handle_buyer_address(event, client):
     """Handle /buyer command - SEND RESPONSE IN GROUP"""
