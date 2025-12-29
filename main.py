@@ -23,7 +23,7 @@ from handlers.create import handle_create, handle_create_p2p, handle_create_othe
 from handlers.stats import handle_stats
 from handlers.about import handle_about
 from handlers.help import handle_help
-from handlers.addresses import setup_address_handlers
+from handlers.addresses import setup_address_handlers  # NEW: Address handlers
 
 # Import utilities
 from utils.texts import (
@@ -383,6 +383,9 @@ class EscrowBot:
         @self.client.on(events.CallbackQuery(pattern=rb'role_'))
         async def role_handler(event):
             await self.handle_role_selection(event)
+        
+        # Setup address handlers (NEW)
+        setup_address_handlers(self.client)
         
         # Delete system messages only
         @self.client.on(events.NewMessage)
@@ -880,6 +883,7 @@ class EscrowBot:
             print("   • Profile picture preview on /begin")
             print("   • PFP logo generation on role confirmation")
             print("   • Role selection system")
+            print("   • Address management (/buyer, /seller, /addresses)")
             print("   • Works with users without usernames")
             print("   • User ID display for long/no usernames")
             print("\n📡 Bot is ready...")
