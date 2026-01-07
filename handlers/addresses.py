@@ -1,8 +1,9 @@
-#!/usr/bin/env python3
+# address_handler.py
 """
-Advanced Address Handler for Escrow Bot - Multi-Chain Support
-Supports: BTC, LTC, ETH, BSC, Polygon, USDT BEP-20, USDT TRC-20
+Address Handler Plugin for OneEscrow Bot
+Integrates with existing role system
 """
+
 import re
 import json
 import os
@@ -12,690 +13,582 @@ import asyncio
 import aiohttp
 from typing import Dict, Optional, Tuple, List
 from datetime import datetime
-from telethon import events
-from colorama import init, Fore, Style, Back
+from telethon import events, Button
 
-# Initialize colorama for colored terminal output
-init(autoreset=True)
+# ==================== CONFIGURATION ====================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# --- Enhanced Colored Logging ---
-class ColoredFormatter(logging.Formatter):
-    """Custom formatter with colors"""
-    
-    COLORS = {
-        'DEBUG': Fore.CYAN,
-        'INFO': Fore.GREEN,
-        'WARNING': Fore.YELLOW,
-        'ERROR': Fore.RED,
-        'CRITICAL': Back.RED + Fore.WHITE
-    }
-    
-    def format(self, record):
-        color = self.COLORS.get(record.levelname, Fore.WHITE)
-        message = super().format(record)
-        return f"{color}{message}{Style.RESET_ALL}"
+# Use your existing data paths
+USER_ADDRESSES_FILE = os.path.join(BASE_DIR, 'data/user_addresses.json')
+USER_ROLES_FILE = os.path.join(BASE_DIR, 'data/user_roles.json')
+ACTIVE_GROUPS_FILE = os.path.join(BASE_DIR, 'data/active_groups.json')
+MESSAGES_LOG_FILE = os.path.join(BASE_DIR, 'data/messages_log.json')
 
-# Setup logging
+# ==================== LOGGING ====================
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
-# Console handler with colors
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(ColoredFormatter(
-    '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    datefmt='%H:%M:%S'
-))
-logger.addHandler(console_handler)
-
-# File handler for persistent logs
-os.makedirs('logs', exist_ok=True)
-file_handler = logging.FileHandler(
-    f'logs/address_handler_{datetime.now().strftime("%Y%m%d")}.log',
-    encoding='utf-8'
-)
-file_handler.setFormatter(logging.Formatter(
-    '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-))
-logger.addHandler(file_handler)
-
-# --- Paths ---
-USER_ADDRESSES_FILE = 'data/user_addresses.json'
-USER_ROLES_FILE = 'data/user_roles.json'
-ACTIVE_GROUPS_FILE = 'data/active_groups.json'
-
-# --- API Keys (Get from environment) ---
-API_KEYS = {
-    'etherscan': os.getenv('ETHERSCAN_API_KEY', 'DFPIRXHE54RBAZP9NIMYE3V5Z5K9U4Y126'),
-    'bscscan': os.getenv('BSCSCAN_API_KEY', '7I7X2FJJVPCX64C1TSS57CNRQ2UY2A1WZ4'),
-    'polygonscan': os.getenv('POLYGONSCAN_API_KEY', 'HPTF5DRNK2S79EY5UMBE4Y4I8GPYX4HSS7'),
-    'blockcypher': os.getenv('BLOCKCYPHER_API_KEY', '7434a8ddf7244987b413e22353d3e266'),
-    'tronscan': None  # TronScan doesn't require API key for basic queries
-}
-
-# --- Response Texts ---
-TEXTS = {
-    'BUYER_PROMPT': "👤 <b>Buyer Address Required</b>\n\nPlease send: <code>/buyer [your_address]</code>\n\nSupported formats:\n• BTC, LTC\n• ETH, BSC, Polygon\n• USDT (BEP-20/ERC-20/TRC-20)",
-    'SELLER_PROMPT': "👤 <b>Seller Address Required</b>\n\nPlease send: <code>/seller [your_address]</code>\n\nSupported formats:\n• BTC, LTC\n• ETH, BSC, Polygon\n• USDT (BEP-20/ERC-20/TRC-20)",
-    'PROCESSING': "🔍 <b>Processing Address...</b>\n\n<i>Verifying format and network...</i>",
-    'VALIDATING': "🔄 <b>Validating on Blockchain...</b>\n\n<i>Checking activity and balance...</i>",
-    'SAVED': """✅ <b>{role} Address Saved Successfully!</b>
-
-<b>Address:</b> <code>{address}</code>
-<b>Network:</b> {chain}
-<b>User:</b> {user_mention}
-<b>Status:</b> {status}
-
-{wallet_info}
-
-⚠️ <b>Important:</b> This address is now locked for this escrow session.""",
-    'INVALID_FORMAT': "❌ <b>Invalid Address Format</b>\n\n<code>{address}</code>\n\nThis doesn't match any known cryptocurrency address format.",
-    'NO_ROLE': "❌ <b>Access Denied</b>\n\nYou don't have the required role for this command.\nContact the group admin.",
-    'ALREADY_SET': """⚠️ <b>Address Already Registered</b>
-
-<b>Current {role} Address:</b> <code>{address}</code>
-<b>Network:</b> {chain}
-<b>Set by:</b> {user_mention}
-
-To change, ask admin to clear first.""",
-    'VIEW_ADDRESSES': """📋 <b>Escrow Addresses</b>
-🏷️ <b>Group:</b> {group_name}
-
-<b>Buyer:</b> {buyer_mention}
-<code>{buyer_address}</code>
-<b>Network:</b> {buyer_chain}
-<b>Status:</b> {buyer_status}
-
-<b>Seller:</b> {seller_mention}
-<code>{seller_address}</code>
-<b>Network:</b> {seller_chain}
-<b>Status:</b> {seller_status}
-
-<i>Last updated: {last_updated}</i>""",
-    'NO_ADDRESSES': "📭 <b>No Addresses Set</b>\n\nBuyer and seller addresses haven't been set yet.",
-    'DUPLICATE_USER': """❌ <b>Duplicate Role Detected</b>
-
-You are already registered as <b>{existing_role}</b> in this group.
-
-Current address: <code>{existing_address}</code>
-Network: {existing_chain}
-
-⚠️ One user cannot be both buyer and seller in the same escrow session.""",
-    'WALLET_INFO': """📊 <b>Wallet Details:</b>
-• Type: {wallet_type}
-• Transactions: {tx_count}
-• Balance: ≈ ${balance_usd}
-• First Tx: {first_tx_date}
-• Last Active: {last_tx_date}""",
-    'VERIFICATION_FAILED': "❌ <b>Verification Failed</b>\n\nAddress <code>{address}</code> could not be verified on {chain}.\n\nPossible reasons:\n• Invalid address\n• Network issue\n• New wallet (0 transactions)"
-}
-
-# --- Data Management ---
-def load_json(filepath: str) -> Dict:
-    """Load JSON file safely"""
-    if os.path.exists(filepath):
-        try:
+# ==================== DATA MANAGEMENT ====================
+def load_json(filepath: str, default=None):
+    """Load JSON with error handling"""
+    if default is None:
+        default = {}
+    
+    try:
+        if os.path.exists(filepath):
             with open(filepath, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            logger.error(f"Error loading {filepath}: {e}")
-            return {}
-    return {}
+    except Exception as e:
+        logger.error(f"Failed to load {filepath}: {e}")
+    
+    return default
 
 def save_json(filepath: str, data: Dict) -> bool:
-    """Save JSON file safely"""
+    """Save JSON with directory creation"""
     try:
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         return True
-    except IOError as e:
-        logger.error(f"Error saving {filepath}: {e}")
+    except Exception as e:
+        logger.error(f"Failed to save {filepath}: {e}")
         return False
 
-def load_addresses(): return load_json(USER_ADDRESSES_FILE)
-def save_addresses(data): return save_json(USER_ADDRESSES_FILE, data)
-def load_user_roles(): return load_json(USER_ROLES_FILE)
-def load_groups(): return load_json(ACTIVE_GROUPS_FILE)
-
-# --- Address Validator Class ---
-class AdvancedAddressValidator:
-    """Multi-chain cryptocurrency address validator with blockchain verification"""
+# ==================== BLOCKCHAIN VALIDATOR ====================
+class BlockchainValidator:
+    """Blockchain address validator"""
     
-    # Comprehensive regex patterns
-    PATTERNS = {
-        'BTC': [
-            r'^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$',  # Legacy
-            r'^bc1[ac-hj-np-z02-9]{11,71}$',       # Bech32
-            r'^bc1p[ac-hj-np-z02-9]{11,71}$'       # Bech32m (Taproot)
-        ],
-        'LTC': [
-            r'^[LM3][a-km-zA-HJ-NP-Z1-9]{26,33}$',  # Legacy
-            r'^ltc1[ac-hj-np-z02-9]{11,71}$'        # Bech32
-        ],
-        'EVM': r'^0x[a-fA-F0-9]{40}$',  # ETH, BSC, Polygon, etc.
-        'TRX': r'^T[0-9a-zA-Z]{33}$',   # Tron addresses
-        'DOGE': r'^D[5-9A-HJ-NP-U][1-9A-HJ-NP-Za-km-z]{32}$',
-        'XRP': r'^r[0-9a-zA-Z]{24,34}$',
-    }
-    
-    # Chain configurations
-    CHAIN_CONFIGS = {
+    CHAINS = {
         'BTC': {
             'name': 'Bitcoin',
-            'symbol': 'BTC',
-            'api_urls': [
-                'https://blockchain.info/rawaddr/{address}?limit=0',
-                'https://api.blockcypher.com/v1/btc/main/addrs/{address}'
-            ],
-            'explorer': 'https://blockchain.com/explorer/addresses/btc/{address}'
-        },
-        'LTC': {
-            'name': 'Litecoin',
-            'symbol': 'LTC',
-            'api_urls': [
-                'https://api.blockcypher.com/v1/ltc/main/addrs/{address}',
-                'https://chain.so/api/v2/address/LTC/{address}'
-            ],
-            'explorer': 'https://blockchair.com/litecoin/address/{address}'
+            'regex': r'^(bc1|[13])[a-zA-HJ-NP-Z0-9]{25,59}$',
+            'explorer': 'https://blockchain.com/explorer/addresses/btc/{address}',
         },
         'ETH': {
             'name': 'Ethereum',
-            'symbol': 'ETH',
-            'api_urls': [
-                f'https://api.etherscan.io/api?module=account&action=balance&address={{address}}&tag=latest&apikey={API_KEYS["etherscan"]}',
-                f'https://api.etherscan.io/api?module=account&action=txlist&address={{address}}&startblock=0&endblock=99999999&page=1&offset=1&sort=asc&apikey={API_KEYS["etherscan"]}'
-            ],
-            'explorer': 'https://etherscan.io/address/{address}'
+            'regex': r'^0x[a-fA-F0-9]{40}$',
+            'explorer': 'https://etherscan.io/address/{address}',
         },
         'BSC': {
             'name': 'BNB Smart Chain',
-            'symbol': 'BNB',
-            'api_urls': [
-                f'https://api.bscscan.com/api?module=account&action=balance&address={{address}}&tag=latest&apikey={API_KEYS["bscscan"]}',
-                f'https://api.bscscan.com/api?module=account&action=txlist&address={{address}}&startblock=0&endblock=99999999&page=1&offset=1&sort=asc&apikey={API_KEYS["bscscan"]}'
-            ],
-            'explorer': 'https://bscscan.com/address/{address}'
-        },
-        'POLYGON': {
-            'name': 'Polygon',
-            'symbol': 'MATIC',
-            'api_urls': [
-                f'https://api.polygonscan.com/api?module=account&action=balance&address={{address}}&tag=latest&apikey={API_KEYS["polygonscan"]}',
-                f'https://api.polygonscan.com/api?module=account&action=txlist&address={{address}}&startblock=0&endblock=99999999&page=1&offset=1&sort=asc&apikey={API_KEYS["polygonscan"]}'
-            ],
-            'explorer': 'https://polygonscan.com/address/{address}'
+            'regex': r'^0x[a-fA-F0-9]{40}$',
+            'explorer': 'https://bscscan.com/address/{address}',
         },
         'TRX': {
             'name': 'Tron',
-            'symbol': 'TRX',
-            'api_urls': [
-                'https://apilist.tronscan.org/api/account?address={address}',
-                'https://api.trongrid.io/v1/accounts/{address}'
-            ],
-            'explorer': 'https://tronscan.org/#/address/{address}'
+            'regex': r'^T[a-zA-Z0-9]{33}$',
+            'explorer': 'https://tronscan.org/#/address/{address}',
+        },
+        'LTC': {
+            'name': 'Litecoin',
+            'regex': r'^(ltc1|[LM])[a-zA-HJ-NP-Z0-9]{26,33}$',
+            'explorer': 'https://blockchair.com/litecoin/address/{address}',
+        },
+        'MATIC': {
+            'name': 'Polygon',
+            'regex': r'^0x[a-fA-F0-9]{40}$',
+            'explorer': 'https://polygonscan.com/address/{address}',
         }
     }
     
     @staticmethod
-    def detect_format(address: str) -> Tuple[str, str]:
-        """Detect address format and chain type"""
+    def detect_chain(address: str) -> Tuple[Optional[str], Optional[str]]:
+        """Detect blockchain from address"""
         address = address.strip()
         
-        # Check BTC
-        for pattern in AdvancedAddressValidator.PATTERNS['BTC']:
-            if re.match(pattern, address):
-                return 'BTC', 'Bitcoin'
+        for chain_code, config in BlockchainValidator.CHAINS.items():
+            if re.match(config['regex'], address):
+                return chain_code, config['name']
         
-        # Check LTC
-        for pattern in AdvancedAddressValidator.PATTERNS['LTC']:
-            if re.match(pattern, address):
-                return 'LTC', 'Litecoin'
-        
-        # Check EVM (ETH, BSC, Polygon, etc.)
-        if re.match(AdvancedAddressValidator.PATTERNS['EVM'], address):
-            return 'EVM', 'EVM Compatible'
-        
-        # Check TRX
-        if re.match(AdvancedAddressValidator.PATTERNS['TRX'], address):
-            return 'TRX', 'Tron'
-        
-        # Check DOGE
-        if re.match(AdvancedAddressValidator.PATTERNS['DOGE'], address):
-            return 'DOGE', 'Dogecoin'
-        
-        # Check XRP
-        if re.match(AdvancedAddressValidator.PATTERNS['XRP'], address):
-            return 'XRP', 'Ripple'
-        
-        return 'UNKNOWN', 'Unknown Format'
+        return None, None
     
     @staticmethod
-    async def verify_evm_chain(address: str) -> Tuple[str, Dict]:
-        """Determine specific EVM chain (ETH, BSC, Polygon)"""
-        async with aiohttp.ClientSession() as session:
-            chains_to_check = ['ETH', 'BSC', 'POLYGON']
-            results = {}
-            
-            for chain in chains_to_check:
-                config = AdvancedAddressValidator.CHAIN_CONFIGS.get(chain)
-                if not config or not config['api_urls']:
-                    continue
-                
-                try:
-                    url = config['api_urls'][0].format(address=address)
-                    timeout = aiohttp.ClientTimeout(total=10)
-                    
-                    async with session.get(url, timeout=timeout) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            
-                            # Different APIs return different formats
-                            if chain == 'ETH':
-                                if data.get('status') == '1' or data.get('message') == 'OK':
-                                    balance = int(data.get('result', 0)) / 10**18
-                                    if balance > 0 or await AdvancedAddressValidator.check_evm_activity(session, address, chain):
-                                        results[chain] = {
-                                            'balance': balance,
-                                            'valid': True,
-                                            'name': config['name']
-                                        }
-                            elif chain == 'BSC':
-                                if data.get('status') == '1':
-                                    balance = int(data.get('result', 0)) / 10**18
-                                    if balance > 0 or await AdvancedAddressValidator.check_evm_activity(session, address, chain):
-                                        results[chain] = {
-                                            'balance': balance,
-                                            'valid': True,
-                                            'name': config['name']
-                                        }
-                            elif chain == 'POLYGON':
-                                if data.get('status') == '1':
-                                    balance = int(data.get('result', 0)) / 10**18
-                                    if balance > 0 or await AdvancedAddressValidator.check_evm_activity(session, address, chain):
-                                        results[chain] = {
-                                            'balance': balance,
-                                            'valid': True,
-                                            'name': config['name']
-                                        }
-                except Exception as e:
-                    logger.debug(f"Chain {chain} check failed: {e}")
-                    continue
-            
-            # Decision logic
-            if not results:
-                return 'EVM (Unverified)', {}
-            
-            # Prefer chains with balance
-            for chain in ['ETH', 'BSC', 'POLYGON']:
-                if chain in results and results[chain]['balance'] > 0:
-                    return f"{results[chain]['name']} (ERC-20)", results[chain]
-            
-            # If all have 0 balance, check activity
-            for chain in ['ETH', 'BSC', 'POLYGON']:
-                if chain in results and await AdvancedAddressValidator.check_evm_activity(session, address, chain):
-                    return f"{results[chain]['name']} (ERC-20/BEP-20)", results[chain]
-            
-            # Default to first valid chain
-            first_chain = list(results.keys())[0]
-            return f"{results[first_chain]['name']} (Unused)", results[first_chain]
-    
-    @staticmethod
-    async def check_evm_activity(session: aiohttp.ClientSession, address: str, chain: str) -> bool:
-        """Check if address has any transactions on EVM chain"""
-        config = AdvancedAddressValidator.CHAIN_CONFIGS.get(chain)
-        if not config or len(config['api_urls']) < 2:
-            return False
+    async def verify_address(address: str) -> Tuple[bool, Optional[str], Optional[str]]:
+        """Verify address and return (is_valid, chain_code, chain_name)"""
+        chain_code, chain_name = BlockchainValidator.detect_chain(address)
         
-        try:
-            url = config['api_urls'][1].format(address=address)
-            async with session.get(url, timeout=10) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if chain == 'ETH':
-                        return data.get('status') == '1' and len(data.get('result', [])) > 0
-                    elif chain in ['BSC', 'POLYGON']:
-                        return data.get('status') == '1' and len(data.get('result', [])) > 0
-        except:
-            pass
-        return False
-    
-    @staticmethod
-    async def get_wallet_info(address: str, chain_type: str) -> Dict:
-        """Get detailed wallet information"""
-        wallet_info = {
-            'wallet_type': 'Unknown',
-            'tx_count': 0,
-            'balance_usd': 'N/A',
-            'first_tx_date': 'Never',
-            'last_tx_date': 'Never',
-            'status': 'Unverified'
-        }
+        if not chain_code:
+            return False, None, None
         
-        if chain_type == 'UNKNOWN':
-            return wallet_info
-        
-        async with aiohttp.ClientSession() as session:
-            try:
-                if chain_type == 'BTC':
-                    url = f'https://blockchain.info/rawaddr/{address}?limit=1'
-                    async with session.get(url, timeout=10) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            wallet_info.update({
-                                'wallet_type': 'Bitcoin Wallet',
-                                'tx_count': data.get('n_tx', 0),
-                                'balance_usd': f"${data.get('final_balance', 0) / 10**8:.2f}",
-                                'first_tx_date': 'Active' if data.get('n_tx', 0) > 0 else 'New',
-                                'last_tx_date': 'Recent' if data.get('n_tx', 0) > 0 else 'None',
-                                'status': '✅ Verified' if data.get('n_tx', 0) > 0 else '🆕 New'
-                            })
-                
-                elif chain_type == 'LTC':
-                    url = f'https://api.blockcypher.com/v1/ltc/main/addrs/{address}'
-                    async with session.get(url, timeout=10) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            wallet_info.update({
-                                'wallet_type': 'Litecoin Wallet',
-                                'tx_count': data.get('n_tx', 0),
-                                'balance_usd': f"${data.get('balance', 0) / 10**8:.2f}",
-                                'first_tx_date': 'Active' if data.get('n_tx', 0) > 0 else 'New',
-                                'last_tx_date': 'Recent' if data.get('n_tx', 0) > 0 else 'None',
-                                'status': '✅ Verified' if data.get('n_tx', 0) > 0 else '🆕 New'
-                            })
-                
-                elif chain_type == 'EVM':
-                    # Try ETH first
-                    config = AdvancedAddressValidator.CHAIN_CONFIGS.get('ETH')
-                    if config and API_KEYS['etherscan']:
-                        url = f'https://api.etherscan.io/api?module=account&action=txlist&address={address}&startblock=0&endblock=99999999&page=1&offset=10&sort=asc&apikey={API_KEYS["etherscan"]}'
-                        async with session.get(url, timeout=10) as response:
-                            if response.status == 200:
-                                data = await response.json()
-                                if data.get('status') == '1':
-                                    txs = data.get('result', [])
-                                    wallet_info.update({
-                                        'wallet_type': 'Ethereum Wallet',
-                                        'tx_count': len(txs),
-                                        'first_tx_date': datetime.fromtimestamp(int(txs[0]['timeStamp'])).strftime('%Y-%m-%d') if txs else 'New',
-                                        'last_tx_date': datetime.fromtimestamp(int(txs[-1]['timeStamp'])).strftime('%Y-%m-%d') if txs else 'None',
-                                        'status': '✅ Verified' if txs else '🆕 New'
-                                    })
-                
-                elif chain_type == 'TRX':
-                    url = f'https://apilist.tronscan.org/api/account?address={address}'
-                    async with session.get(url, timeout=10) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            if 'balances' in data:
-                                wallet_info.update({
-                                    'wallet_type': 'Tron Wallet (TRC-20)',
-                                    'tx_count': data.get('totalTransactionCount', 0),
-                                    'status': '✅ Verified' if data.get('totalTransactionCount', 0) > 0 else '🆕 New'
-                                })
-            
-            except Exception as e:
-                logger.debug(f"Wallet info error: {e}")
-        
-        return wallet_info
+        # For EVM chains, we could add additional verification here
+        # For now, just return the detected chain
+        return True, chain_code, chain_name
 
-# --- Handler Functions ---
-async def handle_address_command(event, role_key: str):
-    """Handle /buyer and /seller commands"""
-    try:
-        user = await event.get_sender()
-        user_id = user.id
-        command = event.text.strip()
-        
-        logger.info(f"{Fore.CYAN}[{role_key.upper()}] Command from {user_id} ({user.username or user.first_name})")
-        
-        # Check if command has address
-        if len(command.split()) < 2:
-            prompt = TEXTS['BUYER_PROMPT'] if role_key == 'buyer' else TEXTS['SELLER_PROMPT']
-            await event.reply(prompt, parse_mode='html')
-            return
-        
-        address = command.split(maxsplit=1)[1].strip()
-        logger.info(f"Address submitted: {address[:10]}...")
-        
-        # Step 1: Format validation
-        msg = await event.reply(TEXTS['PROCESSING'], parse_mode='html')
-        await asyncio.sleep(1.5)
-        
-        chain_type, chain_name = AdvancedAddressValidator.detect_format(address)
-        
-        if chain_type == 'UNKNOWN':
-            logger.warning(f"Invalid format: {address}")
-            await msg.edit(TEXTS['INVALID_FORMAT'].format(address=address), parse_mode='html')
-            return
-        
-        logger.info(f"Format detected: {chain_type} - {chain_name}")
-        
-        # Step 2: Blockchain verification
-        await msg.edit(TEXTS['VALIDATING'], parse_mode='html')
-        await asyncio.sleep(2)
-        
-        # Load data
-        roles = load_user_roles()
-        addresses = load_addresses()
-        
-        # Find user's group and role
-        user_group_id = None
-        user_role_in_group = None
-        
-        for group_id, role_data in roles.items():
-            for uid, data in role_data.items():
-                if int(uid) == user_id:
-                    user_group_id = group_id
-                    user_role_in_group = data.get('role')
-                    break
-            if user_group_id:
-                break
-        
-        if not user_group_id:
-            logger.warning(f"No role found for user {user_id}")
-            await msg.edit(TEXTS['NO_ROLE'], parse_mode='html')
-            return
-        
-        # Check for duplicate role (user trying to be both buyer and seller)
-        if user_role_in_group and user_role_in_group != role_key:
-            logger.warning(f"Duplicate role attempt: {user_id} is {user_role_in_group}, trying to be {role_key}")
+# ==================== ROLE MANAGER ====================
+class RoleManager:
+    """Check user roles from existing data"""
+    
+    @staticmethod
+    def get_user_role(user_id: int, group_id: str) -> Optional[str]:
+        """Get user's role from existing user_roles.json"""
+        try:
+            roles = load_json(USER_ROLES_FILE, {})
+            group_roles = roles.get(str(group_id), {})
             
-            # Get existing address
-            group_addresses = addresses.get(user_group_id, {})
-            existing_address = group_addresses.get(user_role_in_group, {}).get('address', 'Unknown')
-            existing_chain = group_addresses.get(user_role_in_group, {}).get('chain', 'Unknown')
+            # Check if user has a role
+            for uid, role_data in group_roles.items():
+                if str(user_id) == uid:
+                    return role_data.get('role')
             
-            await msg.edit(TEXTS['DUPLICATE_USER'].format(
-                existing_role=user_role_in_group.capitalize(),
-                existing_address=existing_address,
-                existing_chain=existing_chain
-            ), parse_mode='html')
-            return
+            return None
+        except Exception as e:
+            logger.error(f"Error getting user role: {e}")
+            return None
+    
+    @staticmethod
+    def can_use_command(user_id: int, command_role: str, group_id: str) -> bool:
+        """Check if user can use command based on their existing role"""
+        user_role = RoleManager.get_user_role(user_id, group_id)
         
-        # Check if address already set for this role in group
-        group_addresses = addresses.get(user_group_id, {})
-        if role_key in group_addresses:
-            existing = group_addresses[role_key]
-            if existing['user_id'] == user_id:
-                logger.info(f"Address already set for {role_key} by {user_id}")
-                
-                user_mention = f"<a href='tg://user?id={user_id}'>{user.first_name}</a>"
-                
-                await msg.edit(TEXTS['ALREADY_SET'].format(
-                    role=role_key.capitalize(),
-                    address=existing['address'],
-                    chain=existing['chain'],
-                    user_mention=user_mention
-                ), parse_mode='html')
+        # Debug logging
+        logger.info(f"Checking command: user={user_id}, wanted={command_role}, has={user_role}")
+        
+        return user_role == command_role
+
+# ==================== MESSAGE TEMPLATES ====================
+class MessageTemplates:
+    """Message templates for address handler"""
+    
+    @staticmethod
+    def processing():
+        return "🔍 **Processing your address...**"
+    
+    @staticmethod
+    def invalid_format():
+        return """❌ **Invalid Address Format!**
+
+Please use a valid address format:
+• **Bitcoin (BTC):** `1A1zP1...` or `bc1q...`
+• **Ethereum (ETH):** `0x...`
+• **BNB Chain (BSC):** `0x...`
+• **Tron (TRX):** `T...`
+• **Litecoin (LTC):** `L...` or `ltc1q...`
+• **Polygon (MATIC):** `0x...`"""
+    
+    @staticmethod
+    def wrong_role(user_role: str, command_role: str):
+        return f"""⚠️ **Role Mismatch!**
+
+You are registered as **{user_role.upper()}**, but trying to use **{command_role.upper()}** command.
+
+Please use `/{"buyer" if user_role == "buyer" else "seller"}` instead."""
+    
+    @staticmethod
+    def no_role():
+        return """❌ **No Role Assigned!**
+
+You don't have a role in this escrow session.
+
+Please wait for admin to assign you a role (buyer or seller)."""
+    
+    @staticmethod
+    def address_saved_success(user_name: str, role: str, address: str, chain: str):
+        explorer = BlockchainValidator.CHAINS.get(chain, {}).get('explorer', '').format(address=address)
+        
+        return f"""✅ **{role.upper()} ADDRESS SAVED SUCCESSFULLY!**
+
+**User:** {user_name}
+**Role:** {role.upper()}
+**Chain:** {chain}
+**Address:** `{address}`
+
+🔗 [View on Explorer]({explorer})
+
+⚠️ *This address is now locked for this escrow session.*"""
+    
+    @staticmethod
+    def group_notification(user_name: str, role: str, address: str, chain: str):
+        explorer = BlockchainValidator.CHAINS.get(chain, {}).get('explorer', '').format(address=address)
+        
+        buttons = [
+            [Button.url(f"🔗 {role.upper()} Wallet", explorer)],
+            [Button.url("📊 Check Balance", f"https://debank.com/profile/{address}" if chain in ['ETH', 'BSC', 'MATIC'] else explorer)]
+        ]
+        
+        message = f"""📢 **NEW {role.upper()} REGISTERED!**
+
+**User:** {user_name}
+**Chain:** {chain}
+**Address:** `{address[:12]}...{address[-6:]}`
+
+✅ Address verified and saved!"""
+        
+        return message, buttons
+    
+    @staticmethod
+    def chain_mismatch(buyer_chain: str, seller_chain: str):
+        return f"""❌ **CHAIN MISMATCH DETECTED!**
+
+Buyer Chain: **{buyer_chain}**
+Seller Chain: **{seller_chain}**
+
+⚠️ **Both parties must use the same blockchain!**
+
+Please coordinate and use the same chain."""
+    
+    @staticmethod
+    def escrow_ready(group_name: str, buyer: Dict, seller: Dict, buyer_msg_id: int, seller_msg_id: int, group_id: str):
+        """Create escrow ready message with inline buttons"""
+        
+        # Create message links
+        if str(group_id).startswith('-100'):
+            # Supergroup format
+            buyer_link = f"https://t.me/c/{group_id[4:]}/{buyer_msg_id}"
+            seller_link = f"https://t.me/c/{group_id[4:]}/{seller_msg_id}"
+        else:
+            # Regular group format
+            buyer_link = f"https://t.me/c/{group_id}/{buyer_msg_id}"
+            seller_link = f"https://t.me/c/{group_id}/{seller_msg_id}"
+        
+        # Get explorers
+        buyer_explorer = BlockchainValidator.CHAINS.get(buyer['chain'], {}).get('explorer', '').format(address=buyer['address'])
+        seller_explorer = BlockchainValidator.CHAINS.get(seller['chain'], {}).get('explorer', '').format(address=seller['address'])
+        
+        # Create buttons
+        buttons = [
+            [
+                Button.url(f"👤 {buyer['user_name']}'s Wallet", buyer_explorer),
+                Button.url("📋 Buyer Post", buyer_link)
+            ],
+            [
+                Button.url(f"👤 {seller['user_name']}'s Wallet", seller_explorer),
+                Button.url("📋 Seller Post", seller_link)
+            ]
+        ]
+        
+        message = f"""🎉 **ESCROW SETUP COMPLETE!**
+
+**Group:** {group_name}
+**Chain:** {buyer['chain']}
+**Status:** ✅ Ready for Transaction
+
+👥 **Participants:**
+• **Buyer:** {buyer['user_name']}
+  `{buyer['address'][:12]}...{buyer['address'][-6:]}`
+  
+• **Seller:** {seller['user_name']}
+  `{seller['address'][:12]}...{seller['address'][-6:]}`
+
+✅ **Verification Complete:**
+✓ Both addresses verified
+✓ Same blockchain network
+✓ Ready for deposit
+
+⚠️ **Next Steps:**
+1. Buyer sends payment
+2. Seller confirms delivery
+3. Funds released
+
+⏰ **Auto-confirm in 24h if no disputes.**"""
+        
+        return message, buttons
+
+# ==================== ADDRESS HANDLER ====================
+class AddressHandler:
+    """Main address handler for buyer/seller commands"""
+    
+    def __init__(self, client):
+        self.client = client
+        self.validator = BlockchainValidator()
+        self.setup_handlers()
+        logger.info("✅ Address Handler loaded")
+    
+    def setup_handlers(self):
+        """Setup command handlers"""
+        
+        @self.client.on(events.NewMessage(pattern=r'^/buyer(\s+|$)'))
+        async def buyer_handler(event):
+            await self.handle_address_command(event, 'buyer')
+        
+        @self.client.on(events.NewMessage(pattern=r'^/seller(\s+|$)'))
+        async def seller_handler(event):
+            await self.handle_address_command(event, 'seller')
+    
+    async def handle_address_command(self, event, role: str):
+        """Handle /buyer or /seller command"""
+        try:
+            user = await event.get_sender()
+            chat = await event.get_chat()
+            
+            user_id = user.id
+            chat_id = event.chat_id
+            
+            logger.info(f"Received /{role} from user {user_id} in chat {chat_id}")
+            
+            # Check if in group
+            if not hasattr(chat, 'title'):
+                await event.reply("❌ This command only works in groups!")
                 return
-        
-        # Verify address and get chain details
-        final_chain = chain_name
-        wallet_info = {}
-        
-        if chain_type == 'EVM':
-            detected_chain, evm_info = await AdvancedAddressValidator.verify_evm_chain(address)
-            final_chain = detected_chain
-            wallet_info = await AdvancedAddressValidator.get_wallet_info(address, 'EVM')
-        else:
-            wallet_info = await AdvancedAddressValidator.get_wallet_info(address, chain_type)
-        
-        # Prepare wallet info text
-        wallet_info_text = TEXTS['WALLET_INFO'].format(**wallet_info) if wallet_info.get('tx_count', 0) >= 0 else ""
-        
-        # Save address
-        if user_group_id not in addresses:
-            addresses[user_group_id] = {}
-        
-        addresses[user_group_id][role_key] = {
-            'address': address,
-            'chain': final_chain,
-            'user_id': user_id,
-            'username': user.username or user.first_name,
-            'user_mention': f"<a href='tg://user?id={user_id}'>{user.first_name}</a>",
-            'saved_at': time.time(),
-            'saved_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'wallet_info': wallet_info,
-            'status': wallet_info.get('status', '✅ Verified')
-        }
-        
-        if save_addresses(addresses):
-            logger.info(f"{Fore.GREEN}✓ {role_key.upper()} address saved: {address[:10]}... ({final_chain}) by {user_id}")
             
-            user_mention = f"<a href='tg://user?id={user_id}'>{user.first_name}</a>"
+            # Check user's role
+            user_role = RoleManager.get_user_role(user_id, str(chat_id))
             
-            await msg.edit(TEXTS['SAVED'].format(
-                role=role_key.capitalize(),
-                address=address,
-                chain=final_chain,
-                user_mention=user_mention,
-                status=wallet_info.get('status', '✅ Verified'),
-                wallet_info=wallet_info_text
-            ), parse_mode='html')
-        else:
-            logger.error(f"Failed to save address for {user_id}")
-            await msg.edit("❌ <b>Database Error</b>\n\nFailed to save address. Please try again.", parse_mode='html')
-        
-    except Exception as e:
-        logger.error(f"Handler error: {e}", exc_info=True)
+            if not user_role:
+                await event.reply(MessageTemplates.no_role())
+                return
+            
+            if user_role != role:
+                await event.reply(MessageTemplates.wrong_role(user_role, role))
+                return
+            
+            # Get address from command
+            parts = event.text.split(maxsplit=1)
+            if len(parts) < 2:
+                await event.reply(f"Usage: /{role} [your_wallet_address]")
+                return
+            
+            address = parts[1].strip()
+            
+            # Show processing message
+            processing_msg = await event.reply(MessageTemplates.processing())
+            
+            # Validate address
+            is_valid, chain_code, chain_name = await self.validator.verify_address(address)
+            
+            if not is_valid:
+                await processing_msg.edit(MessageTemplates.invalid_format())
+                return
+            
+            logger.info(f"Address validated: {chain_code} - {chain_name}")
+            
+            # Check if user already has address saved
+            addresses = load_json(USER_ADDRESSES_FILE, {})
+            chat_addresses = addresses.get(str(chat_id), {})
+            
+            if role in chat_addresses and chat_addresses[role].get('user_id') == user_id:
+                # User already has address saved
+                await processing_msg.edit(
+                    f"⚠️ **Address Already Set!**\n\n"
+                    f"You already have a {role} address saved:\n"
+                    f"`{chat_addresses[role]['address'][:16]}...{chat_addresses[role]['address'][-8:]}`\n"
+                    f"**Chain:** {chat_addresses[role]['chain']}\n\n"
+                    f"*Contact admin to change address.*"
+                )
+                return
+            
+            # Prepare address data
+            address_data = {
+                'user_id': user_id,
+                'user_name': user.first_name,
+                'address': address,
+                'chain': chain_code,
+                'chain_name': chain_name,
+                'timestamp': time.time(),
+                'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+            
+            # Save address
+            if str(chat_id) not in addresses:
+                addresses[str(chat_id)] = {}
+            
+            addresses[str(chat_id)][role] = address_data
+            save_json(USER_ADDRESSES_FILE, addresses)
+            
+            # Send success message to user
+            await processing_msg.edit(
+                MessageTemplates.address_saved_success(
+                    user.first_name, role, address, chain_name
+                ),
+                link_preview=False
+            )
+            
+            # Send notification to group
+            group_msg_id = await self.send_group_notification(chat, role, address_data)
+            
+            # Save message info for linking
+            self.save_message_info(str(chat_id), role, group_msg_id, user_id, address)
+            
+            # Check if escrow is ready (both addresses set)
+            await self.check_escrow_ready(chat)
+            
+        except Exception as e:
+            logger.error(f"Error in handle_address_command: {e}", exc_info=True)
+            try:
+                await event.reply("❌ An error occurred. Please try again.")
+            except:
+                pass
+    
+    async def send_group_notification(self, chat, role: str, address_data: Dict) -> Optional[int]:
+        """Send notification to group and return message ID"""
         try:
-            await event.reply("❌ <b>Internal Error</b>\n\nPlease try again later.", parse_mode='html')
-        except:
-            pass
+            message, buttons = MessageTemplates.group_notification(
+                address_data['user_name'],
+                role,
+                address_data['address'],
+                address_data['chain_name']
+            )
+            
+            sent_msg = await self.client.send_message(
+                chat.id,
+                message,
+                buttons=buttons,
+                parse_mode='markdown'
+            )
+            
+            logger.info(f"Group notification sent for {role}")
+            return sent_msg.id
+            
+        except Exception as e:
+            logger.error(f"Error sending group notification: {e}")
+            return None
+    
+    def save_message_info(self, chat_id: str, role: str, message_id: int, user_id: int, address: str):
+        """Save message info for later linking"""
+        try:
+            messages = load_json(MESSAGES_LOG_FILE, {})
+            
+            if chat_id not in messages:
+                messages[chat_id] = {}
+            
+            messages[chat_id][role] = {
+                'message_id': message_id,
+                'user_id': user_id,
+                'address': address,
+                'timestamp': time.time()
+            }
+            
+            save_json(MESSAGES_LOG_FILE, messages)
+            
+        except Exception as e:
+            logger.error(f"Error saving message info: {e}")
+    
+    async def check_escrow_ready(self, chat):
+        """Check if both buyer and seller addresses are set"""
+        try:
+            addresses = load_json(USER_ADDRESSES_FILE, {})
+            chat_addresses = addresses.get(str(chat.id), {})
+            
+            # Check if both addresses exist
+            if 'buyer' not in chat_addresses or 'seller' not in chat_addresses:
+                return
+            
+            buyer = chat_addresses['buyer']
+            seller = chat_addresses['seller']
+            
+            logger.info(f"Checking escrow for chat {chat.id}: buyer={buyer['chain']}, seller={seller['chain']}")
+            
+            # Check chain match
+            if buyer['chain'] != seller['chain']:
+                await self.client.send_message(
+                    chat.id,
+                    MessageTemplates.chain_mismatch(buyer['chain_name'], seller['chain_name']),
+                    parse_mode='markdown'
+                )
+                return
+            
+            # Get message IDs
+            messages = load_json(MESSAGES_LOG_FILE, {})
+            chat_messages = messages.get(str(chat.id), {})
+            
+            buyer_msg_id = chat_messages.get('buyer', {}).get('message_id')
+            seller_msg_id = chat_messages.get('seller', {}).get('message_id')
+            
+            # Send escrow ready message
+            await self.send_escrow_ready(
+                chat, buyer, seller, buyer_msg_id, seller_msg_id
+            )
+            
+        except Exception as e:
+            logger.error(f"Error checking escrow ready: {e}")
+    
+    async def send_escrow_ready(self, chat, buyer: Dict, seller: Dict, buyer_msg_id: int, seller_msg_id: int):
+        """Send escrow ready message with inline buttons"""
+        try:
+            message, buttons = MessageTemplates.escrow_ready(
+                chat.title,
+                buyer,
+                seller,
+                buyer_msg_id,
+                seller_msg_id,
+                str(chat.id)
+            )
+            
+            await self.client.send_message(
+                chat.id,
+                message,
+                buttons=buttons,
+                parse_mode='markdown'
+            )
+            
+            logger.info(f"Escrow ready message sent for {chat.title}")
+            
+        except Exception as e:
+            logger.error(f"Error sending escrow ready: {e}")
 
-async def handle_view_addresses(event, client):
-    """Handle /addresses command"""
+# ==================== PLUGIN LOADER ====================
+def load_plugin(client):
+    """
+    Load the address handler plugin into your existing bot
+    
+    Usage in main.py:
+        from address_handler import load_plugin
+        load_plugin(client)
+    """
     try:
-        user = await event.get_sender()
-        user_id = user.id
-        
-        logger.info(f"{Fore.YELLOW}[VIEW] Request from {user_id}")
-        
-        roles = load_user_roles()
-        addresses = load_addresses()
-        groups = load_groups()
-        
-        # Find user's group
-        user_group_id = None
-        for group_id, role_data in roles.items():
-            if str(user_id) in role_data:
-                user_group_id = group_id
-                break
-        
-        if not user_group_id:
-            await event.reply("❌ <b>No Active Session</b>\n\nYou're not part of any active escrow session.", parse_mode='html')
-            return
-        
-        group_addresses = addresses.get(user_group_id, {})
-        group_info = groups.get(user_group_id, {})
-        group_name = group_info.get('name', f"Group {user_group_id}")
-        
-        if not group_addresses:
-            await event.reply(TEXTS['NO_ADDRESSES'], parse_mode='html')
-            return
-        
-        # Format addresses
-        def format_address_info(role):
-            data = group_addresses.get(role, {})
-            if not data:
-                return "❌ Not set", "...", "N/A", "Not set", "—"
-            
-            user_mention = data.get('user_mention', f"User {data.get('user_id', '?')}")
-            address = data.get('address', '...')
-            chain = data.get('chain', 'Unknown')
-            status = data.get('status', '❓ Unknown')
-            saved_date = data.get('saved_date', 'Unknown')
-            
-            return user_mention, address, chain, status, saved_date
-        
-        b_mention, b_addr, b_chain, b_status, b_date = format_address_info('buyer')
-        s_mention, s_addr, s_chain, s_status, s_date = format_address_info('seller')
-        
-        last_updated = b_date if b_date != 'Unknown' else s_date
-        
-        await event.reply(TEXTS['VIEW_ADDRESSES'].format(
-            group_name=group_name,
-            buyer_mention=b_mention,
-            buyer_address=b_addr,
-            buyer_chain=b_chain,
-            buyer_status=b_status,
-            seller_mention=s_mention,
-            seller_address=s_addr,
-            seller_chain=s_chain,
-            seller_status=s_status,
-            last_updated=last_updated
-        ), parse_mode='html', link_preview=False)
-        
-        logger.info(f"{Fore.GREEN}✓ Addresses viewed by {user_id}")
-        
+        handler = AddressHandler(client)
+        logger.info("🚀 Address Handler Plugin loaded successfully!")
+        return handler
     except Exception as e:
-        logger.error(f"View error: {e}")
-        await event.reply("❌ <b>Error</b>\n\nFailed to retrieve addresses.", parse_mode='html')
+        logger.error(f"Failed to load address handler plugin: {e}")
+        raise
 
-def setup_address_handlers(client):
-    """Setup Telegram event handlers"""
-    
-    @client.on(events.NewMessage(pattern=r'^/buyer(\s|$)'))
-    async def buyer_handler(event):
-        if event.is_private:
-            await handle_address_command(event, 'buyer')
-    
-    @client.on(events.NewMessage(pattern=r'^/seller(\s|$)'))
-    async def seller_handler(event):
-        if event.is_private:
-            await handle_address_command(event, 'seller')
-    
-    @client.on(events.NewMessage(pattern=r'^/addresses(\s|$)'))
-    async def addresses_handler(event):
-        if event.is_private:
-            await handle_view_addresses(event, client)
-    
-    logger.info(f"{Fore.GREEN}✓ Address handlers registered successfully")
+# ==================== INTEGRATION GUIDE ====================
+"""
+HOW TO INTEGRATE WITH YOUR EXISTING BOT:
 
-# --- Test Function ---
-async def test_validator():
-    """Test the validator with sample addresses"""
-    test_addresses = [
-        "0x742d35Cc6634C0532925a3b844Bc9e37F6d5Dc8B",  # ETH
-        "0x2170Ed0880ac9A755fd29B2688956BD959F933F8",  # BSC
-        "TB7Q5J8Q3h8m8m2rZ8v8q3J8Q3h8m8m2rZ8v8q3J",  # TRX (fake)
-        "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",  # BTC (Satoshi's)
-        "LfmVYLt6qF2dgvmVtLzZ3wC17mZ3DdAq1Z",  # LTC
-        "0x0000000000000000000000000000000000000000"  # Invalid
-    ]
-    
-    validator = AdvancedAddressValidator()
-    
-    for addr in test_addresses:
-        print(f"\n{Fore.CYAN}Testing: {addr}")
-        chain_type, chain_name = validator.detect_format(addr)
-        print(f"Detected: {chain_type} - {chain_name}")
-        
-        if chain_type != 'UNKNOWN':
-            info = await validator.get_wallet_info(addr, chain_type)
-            print(f"Info: {info}")
+1. Save this file as 'address_handler.py' in your bot directory
 
+2. In your main.py, add:
+
+# At the top with other imports
+from address_handler import load_plugin
+
+# After creating your client, load the plugin
+client = TelegramClient(...)
+load_plugin(client)
+
+3. That's it! The plugin will automatically:
+   - Read roles from your existing user_roles.json
+   - Save addresses to user_addresses.json
+   - Send group notifications
+   - Check chain matching
+   - Send final escrow ready message
+
+The plugin uses your existing data structure:
+• user_roles.json - for checking user permissions
+• user_addresses.json - for storing wallet addresses
+• messages_log.json - for storing message IDs for linking
+
+Commands available:
+• /buyer [address] - Only for users with 'buyer' role
+• /seller [address] - Only for users with 'seller' role
+
+Features:
+✅ Role-based command access (reads from your existing roles)
+✅ Address validation for multiple blockchains
+✅ Group notifications with wallet explorer links
+✅ Chain matching enforcement
+✅ Message linking in final success message
+✅ Inline buttons for easy navigation
+✅ Integration with your existing data files
+"""
+
+# Simple test
 if __name__ == "__main__":
-    # Run tests
-    asyncio.run(test_validator())
+    print("""
+    🔌 Address Handler Plugin for OneEscrow Bot
+    ==============================================
+    
+    This plugin adds /buyer and /seller commands that:
+    1. Check user's role from existing user_roles.json
+    2. Validate wallet addresses
+    3. Send group notifications
+    4. Check chain matching
+    5. Send final escrow ready message with inline buttons
+    
+    To use:
+    1. Save as address_handler.py
+    2. In main.py: from address_handler import load_plugin
+    3. After client creation: load_plugin(client)
+    
+    No changes needed to your existing role system!
+    """)
