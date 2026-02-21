@@ -1,34 +1,45 @@
+#!/usr/bin/env python3
 """
-Address management handlers for Escrow Bot
-Complete full-length version with all fixes and features
+Main entry point for the Escrow Bot - Complete working version
 """
+import asyncio
 import logging
-from telethon import events
-from telethon.tl import types
+import sys
+from telethon import TelegramClient, events
+from telethon.tl import functions, types
 from telethon.tl.types import ChannelParticipantCreator, ChannelParticipantAdmin, ChannelParticipant
-from telethon.errors import RPCError, FloodWaitError
 import json
 import os
 import time
 import re
-import asyncio
-from datetime import datetime, timedelta
-from collections import defaultdict
+from PIL import Image, ImageDraw, ImageFont
+from io import BytesIO
+from datetime import datetime
+
+# Import configuration
+from config import API_ID, API_HASH, BOT_TOKEN, BOT_USERNAME
+
+# Import handlers
+from handlers.start import handle_start
+from handlers.create import handle_create, handle_create_p2p, handle_create_other
+from handlers.stats import handle_stats
+from handlers.about import handle_about
+from handlers.help import handle_help
+from handlers.addresses import setup_address_handlers
 
 # Import utilities
 from utils.texts import (
-    BUYER_ADDRESS_PROMPT, SELLER_ADDRESS_PROMPT, ADDRESSES_MENU_TEXT,
-    ADDRESS_SAVED_MESSAGE, NO_ADDRESS_MESSAGE, ADDRESSES_RESET_MESSAGE,
-    ADDRESS_UPDATED_MESSAGE, ADDRESS_REMOVED_MESSAGE, ADDRESS_EXPIRED_MESSAGE,
-    ADDRESS_CONFIRMATION_MESSAGE, ADDRESS_BOTH_SET_MESSAGE, ADDRESS_ERROR_MESSAGE
+    START_MESSAGE, CREATE_MESSAGE, P2P_CREATED_MESSAGE, OTHER_CREATED_MESSAGE,
+    WELCOME_MESSAGE, SESSION_INITIATED_MESSAGE, INSUFFICIENT_MEMBERS_MESSAGE,
+    SESSION_ALREADY_INITIATED_MESSAGE, GROUP_NOT_FOUND_MESSAGE,
+    MERGED_PHOTO_CAPTION, PARTICIPANTS_CONFIRMED_MESSAGE, JOIN_MESSAGE,
+    BUYER_CONFIRMED_MESSAGE, SELLER_CONFIRMED_MESSAGE, ROLE_ALREADY_CHOSEN_MESSAGE,
+    ROLE_ALREADY_TAKEN_MESSAGE, WALLET_SETUP_MESSAGE, ESCROW_READY_MESSAGE,
+    CHANNEL_LOG_CREATION, ERROR_MESSAGE, WAITING_PARTICIPANTS_MESSAGE,
+    ROLE_ANNOUNCEMENT_MESSAGE, STATS_MESSAGE, ABOUT_MESSAGE, HELP_MESSAGE
 )
-from utils.buttons import (
-    get_addresses_menu_buttons, get_back_button, get_address_confirmation_buttons,
-    get_address_actions_buttons, get_main_menu_buttons
-)
+from utils.buttons import get_main_menu_buttons, get_session_buttons, get_back_button
 from utils.blacklist import is_blacklisted, add_to_blacklist, load_blacklist
-from utils.validators import validate_address, sanitize_input, is_valid_crypto_address
-from utils.helpers import format_address_preview, get_time_remaining
 
 # Setup logging
 logging.basicConfig(
@@ -37,228 +48,97 @@ logging.basicConfig(
     datefmt='%H:%M:%S'
 )
 
-# Data files
-USER_ADDRESSES_FILE = 'data/user_addresses.json'
+# Track groups for invite management
+GROUPS_FILE = 'data/active_groups.json'
 USER_ROLES_FILE = 'data/user_roles.json'
-ADDRESS_HISTORY_FILE = 'data/address_history.json'
-ADDRESS_STATS_FILE = 'data/address_stats.json'
-ACTIVE_GROUPS_FILE = 'data/active_groups.json'
 
-# Constants
-MAX_ADDRESS_LENGTH = 500
-MIN_ADDRESS_LENGTH = 5
-ADDRESS_TIMEOUT = 1800  # 30 minutes
-MAX_ADDRESS_HISTORY = 10
-ADDRESS_CACHE_TTL = 300  # 5 minutes
+# Asset paths
+BASE_START_IMAGE = "assets/base_start.png"  # For /begin preview
+PFP_TEMPLATE = "assets/tg1.png"  # For final group PFP
+UNKNOWN_PFP = "assets/unknown.png"
+PFP_CONFIG_PATH = "config/pfp_config.json"
 
-# Cache for frequently accessed data
-_address_cache = {
-    'addresses': None,
-    'roles': None,
-    'last_load': 0,
-    'stats': defaultdict(lambda: {'total': 0, 'by_type': defaultdict(int)})
-}
-
-def load_json_file(filepath, default=None):
-    """Safely load JSON file with error handling"""
-    if default is None:
-        default = {}
+def load_groups():
+    """Load active groups data"""
     try:
-        if os.path.exists(filepath):
-            with open(filepath, 'r', encoding='utf-8') as f:
+        if os.path.exists(GROUPS_FILE):
+            with open(GROUPS_FILE, 'r') as f:
                 return json.load(f)
-        return default
-    except json.JSONDecodeError as e:
-        print(f"[ERROR] JSON decode error in {filepath}: {e}")
-        # Try to backup corrupted file
-        try:
-            backup_path = f"{filepath}.backup.{int(time.time())}"
-            os.rename(filepath, backup_path)
-            print(f"[INFO] Backed up corrupted file to {backup_path}")
-        except:
-            pass
-        return default
+        return {}
     except Exception as e:
-        print(f"[ERROR] Loading {filepath}: {e}")
-        return default
+        print(f"[ERROR] Loading groups: {e}")
+        return {}
 
-def save_json_file(filepath, data):
-    """Safely save JSON file with error handling"""
+def save_groups(groups):
+    """Save active groups data"""
     try:
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        
-        # Create temporary file first
-        temp_path = f"{filepath}.temp"
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        
-        # Rename temp file to actual file (atomic operation on Unix)
-        os.replace(temp_path, filepath)
-        return True
+        os.makedirs('data', exist_ok=True)
+        with open(GROUPS_FILE, 'w') as f:
+            json.dump(groups, f, indent=2)
     except Exception as e:
-        print(f"[ERROR] Saving {filepath}: {e}")
-        return False
+        print(f"[ERROR] Saving groups: {e}")
 
-def load_addresses(use_cache=True):
-    """Load user addresses data with caching"""
-    global _address_cache
-    
-    current_time = time.time()
-    
-    # Return cached data if still valid
-    if use_cache and _address_cache['addresses'] is not None:
-        if current_time - _address_cache['last_load'] < ADDRESS_CACHE_TTL:
-            return _address_cache['addresses']
-    
-    # Load fresh data
-    addresses = load_json_file(USER_ADDRESSES_FILE, {})
-    
-    # Update cache
-    _address_cache['addresses'] = addresses
-    _address_cache['last_load'] = current_time
-    
-    # Update stats
-    _address_cache['stats']['total'] = len(addresses)
-    _address_cache['stats']['by_type'] = defaultdict(int)
-    
-    for user_id, user_data in addresses.items():
-        if 'buyer_address' in user_data:
-            _address_cache['stats']['by_type']['buyer'] += 1
-        if 'seller_address' in user_data:
-            _address_cache['stats']['by_type']['seller'] += 1
-    
-    return addresses
-
-def save_addresses(addresses):
-    """Save user addresses data and update cache"""
-    global _address_cache
-    
-    success = save_json_file(USER_ADDRESSES_FILE, addresses)
-    
-    if success:
-        # Update cache
-        _address_cache['addresses'] = addresses
-        _address_cache['last_load'] = time.time()
-        
-        # Update stats
-        _address_cache['stats']['total'] = len(addresses)
-        _address_cache['stats']['by_type'] = defaultdict(int)
-        
-        for user_id, user_data in addresses.items():
-            if 'buyer_address' in user_data:
-                _address_cache['stats']['by_type']['buyer'] += 1
-            if 'seller_address' in user_data:
-                _address_cache['stats']['by_type']['seller'] += 1
-    
-    return success
-
-def load_user_roles(use_cache=True):
-    """Load user roles data with caching"""
-    global _address_cache
-    
-    current_time = time.time()
-    
-    # Return cached data if still valid
-    if use_cache and _address_cache['roles'] is not None:
-        if current_time - _address_cache['last_load'] < ADDRESS_CACHE_TTL:
-            return _address_cache['roles']
-    
-    # Load fresh data
-    roles = load_json_file(USER_ROLES_FILE, {})
-    
-    # Update cache
-    _address_cache['roles'] = roles
-    
-    return roles
+def load_user_roles():
+    """Load user roles data"""
+    try:
+        if os.path.exists(USER_ROLES_FILE):
+            with open(USER_ROLES_FILE, 'r') as f:
+                return json.load(f)
+        return {}
+    except Exception as e:
+        print(f"[ERROR] Loading roles: {e}")
+        return {}
 
 def save_user_roles(roles):
-    """Save user roles data and update cache"""
-    global _address_cache
-    
-    success = save_json_file(USER_ROLES_FILE, roles)
-    
-    if success:
-        _address_cache['roles'] = roles
-    
-    return success
-
-def load_address_history():
-    """Load address history data"""
-    return load_json_file(ADDRESS_HISTORY_FILE, {})
-
-def save_address_history(history):
-    """Save address history data"""
-    return save_json_file(ADDRESS_HISTORY_FILE, history)
-
-def load_address_stats():
-    """Load address statistics"""
-    return load_json_file(ADDRESS_STATS_FILE, {})
-
-def save_address_stats(stats):
-    """Save address statistics"""
-    return save_json_file(ADDRESS_STATS_FILE, stats)
-
-def load_active_groups():
-    """Load active groups data"""
-    return load_json_file(ACTIVE_GROUPS_FILE, {})
-
-def save_active_groups(groups):
-    """Save active groups data"""
-    return save_json_file(ACTIVE_GROUPS_FILE, groups)
+    """Save user roles data"""
+    try:
+        os.makedirs('data', exist_ok=True)
+        with open(USER_ROLES_FILE, 'w') as f:
+            json.dump(roles, f, indent=2)
+    except Exception as e:
+        print(f"[ERROR] Saving roles: {e}")
 
 def get_user_display(user_obj):
-    """Get clean display name for user with multiple fallbacks"""
+    """Get clean display name for user"""
     try:
-        # Try to get username first (preferred)
+        # Get username if exists
         if hasattr(user_obj, 'username') and user_obj.username:
             username = user_obj.username.strip()
-            if username and len(username) > 0:
-                # Validate username format
-                if re.match(r'^[a-zA-Z0-9_]{3,}$', username):
-                    return f"@{username}"
+            if username:
+                return f"@{username}"
         
-        # Try to get first name
+        # Get first name
         first_name = getattr(user_obj, 'first_name', '')
         if first_name:
-            first_name = sanitize_input(first_name.strip())
+            first_name = first_name.strip()
         
-        # Try to get last name
+        # Get last name
         last_name = getattr(user_obj, 'last_name', '')
         if last_name:
-            last_name = sanitize_input(last_name.strip())
+            last_name = last_name.strip()
         
-        # Combine names intelligently
+        # Combine names
         if first_name and last_name:
-            # Check if last name might be a username in disguise
-            if last_name.startswith('@') or re.match(r'^[a-zA-Z0-9_]+$', last_name):
-                full_name = f"{first_name} {last_name}"
-            else:
-                full_name = f"{first_name} {last_name}"
+            full_name = f"{first_name} {last_name}"
         elif first_name:
             full_name = first_name
         elif last_name:
             full_name = last_name
         else:
-            # Ultimate fallback: use user ID
             full_name = f"User_{user_obj.id}"
         
-        # Clean any remaining problematic characters
-        full_name = re.sub(r'[^\w\s@#\-\.\[\]\(\)]', '', full_name)
-        full_name = re.sub(r'\s+', ' ', full_name)  # Replace multiple spaces with single
+        # Clean special characters
+        full_name = re.sub(r'[^\w\s@#\-\.]', '', full_name)
         full_name = full_name.strip()
         
-        # Truncate if too long
-        if len(full_name) > 50:
-            full_name = full_name[:47] + "..."
-        
-        # Final check for empty string
-        if not full_name or full_name.isspace():
+        # If still empty, use user ID
+        if not full_name:
             full_name = f"User_{user_obj.id}"
-        
+            
         return full_name
         
     except Exception as e:
-        print(f"[ERROR] Getting user display for {getattr(user_obj, 'id', 'unknown')}: {e}")
+        print(f"[ERROR] Getting user display: {e}")
         return f"User_{getattr(user_obj, 'id', 'unknown')}"
 
 def clean_group_id(chat_id):
@@ -267,1239 +147,993 @@ def clean_group_id(chat_id):
         chat_id = str(chat_id)
         # Remove -100 prefix for supergroups
         if chat_id.startswith("-100"):
-            cleaned = chat_id[4:]
-            # Verify it's a valid numeric ID
-            if cleaned.isdigit():
-                return cleaned
+            return chat_id[4:]
         return chat_id
     except Exception as e:
-        print(f"[ERROR] Cleaning group ID {chat_id}: {e}")
+        print(f"[ERROR] Cleaning group ID: {e}")
         return str(chat_id)
 
-def format_address_for_display(address, max_length=50):
-    """Format address for display with truncation"""
-    if not address:
-        return "Not set"
-    
-    if len(address) <= max_length:
-        return address
-    
-    # Show first and last parts
-    prefix = address[:20]
-    suffix = address[-20:]
-    return f"{prefix}...{suffix}"
-
-def add_to_address_history(user_id, address_type, address):
-    """Add address to user's history"""
+async def set_group_photo(client, chat, photo_path):
+    """Set group/channel photo with fallback methods"""
     try:
-        history = load_address_history()
-        user_id = str(user_id)
-        
-        if user_id not in history:
-            history[user_id] = []
-        
-        # Create history entry
-        entry = {
-            'type': address_type,
-            'address': address,
-            'timestamp': time.time(),
-            'date': datetime.now().isoformat()
-        }
-        
-        # Add to beginning of list
-        history[user_id].insert(0, entry)
-        
-        # Keep only last MAX_ADDRESS_HISTORY entries
-        history[user_id] = history[user_id][:MAX_ADDRESS_HISTORY]
-        
-        save_address_history(history)
-        return True
-    except Exception as e:
-        print(f"[ERROR] Adding to address history: {e}")
-        return False
+        # Upload the photo file
+        file = await client.upload_file(photo_path)
 
-def update_address_stats(action, address_type=None):
-    """Update address statistics"""
-    try:
-        stats = load_address_stats()
-        
-        # Update general stats
-        stats['total_actions'] = stats.get('total_actions', 0) + 1
-        stats['last_action'] = time.time()
-        
-        # Update daily stats
-        today = datetime.now().strftime('%Y-%m-%d')
-        if 'daily' not in stats:
-            stats['daily'] = {}
-        if today not in stats['daily']:
-            stats['daily'][today] = {'sets': 0, 'updates': 0, 'views': 0}
-        
-        if action == 'set':
-            stats['daily'][today]['sets'] = stats['daily'][today].get('sets', 0) + 1
-            if address_type:
-                stats[f'{address_type}_sets'] = stats.get(f'{address_type}_sets', 0) + 1
-        elif action == 'update':
-            stats['daily'][today]['updates'] = stats['daily'][today].get('updates', 0) + 1
-        elif action == 'view':
-            stats['daily'][today]['views'] = stats['daily'][today].get('views', 0) + 1
-        
-        # Clean up old daily stats (keep last 30 days)
-        cutoff = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
-        stats['daily'] = {k: v for k, v in stats['daily'].items() if k >= cutoff}
-        
-        save_address_stats(stats)
-    except Exception as e:
-        print(f"[ERROR] Updating address stats: {e}")
-
-def setup_address_handlers(client):
-    """Setup all address-related handlers"""
-    
-    # Initialize address state if not exists
-    if not hasattr(client, 'address_state'):
-        client.address_state = {}
-    
-    if not hasattr(client, 'address_temp_data'):
-        client.address_temp_data = {}
-    
-    @client.on(events.NewMessage(pattern='/buyer'))
-    async def buyer_address_handler(event):
-        """Handle /buyer command - Set buyer address"""
+        # Try normal group method first
         try:
-            # Start time for performance tracking
-            start_time = time.time()
-            
-            # Get user and chat info
-            user = await event.get_sender()
-            chat = await event.get_chat()
-            
-            if not user or not chat:
-                await event.reply("❌ Could not identify user or chat.")
-                return
-            
-            # Check if user is blacklisted
-            is_blocked, reason = is_blacklisted(user)
-            if is_blocked:
-                await event.reply(f"❌ You are blacklisted: {reason}")
-                return
-            
-            # Get and clean group ID
-            raw_chat_id = str(event.chat_id)
-            group_id = clean_group_id(raw_chat_id)
-            
-            print(f"[ BUYER ] Command from user {user.id} in chat {raw_chat_id}")
-            print(f"[ BUYER ] Cleaned group_id: {group_id}")
-            print(f"[ BUYER ] User details - Username: {user.username}, First: {user.first_name}")
-            
-            # Load roles with cache
-            roles = load_user_roles(use_cache=True)
-            
-            # Debug: Print all stored role keys
-            print(f"[ BUYER ] Stored role keys: {list(roles.keys())}")
-            
-            # Check if group exists in roles
-            if group_id not in roles:
-                print(f"[ BUYER ] Group {group_id} not found in roles")
-                
-                # Try to find by name as fallback
-                found = False
-                chat_title = getattr(chat, 'title', '')
-                if chat_title:
-                    for key, data in roles.items():
-                        if data.get('name') == chat_title:
-                            group_id = key
-                            found = True
-                            print(f"[ BUYER ] Found group by name: {key}")
-                            break
-                
-                if not found:
-                    await event.reply(
-                        "❌ No active escrow session found in this group.\n\n"
-                        "Use /begin to start a session first.",
-                        parse_mode='html'
-                    )
-                    return
-            
-            # Get roles for this group
-            group_roles = roles.get(group_id, {})
-            
-            # Check if user has a role
-            user_data = group_roles.get(str(user.id))
-            
-            if not user_data:
-                print(f"[ ⚠️ ] User {user.id} has no role in chat {group_id}")
-                
-                # List all users in this group for debugging
-                print(f"[ BUYER ] Users in group {group_id}: {list(group_roles.keys())}")
-                
-                await event.reply(
-                    "❌ You don't have a role in this escrow session.\n\n"
-                    "Only the designated buyer or seller can set addresses.\n\n"
-                    "If you believe this is an error:\n"
-                    "1️⃣ Check that you are one of the two selected participants\n"
-                    "2️⃣ The session may have expired\n"
-                    "3️⃣ Use /begin to start a new session",
-                    parse_mode='html'
+            await client(
+                functions.messages.EditChatPhotoRequest(
+                    chat_id=chat.id,
+                    photo=types.InputChatUploadedPhoto(file=file)
                 )
-                return
-            
-            user_role = user_data.get("role")
-            user_name = user_data.get("name", get_user_display(user))
-            
-            if user_role != "buyer":
-                print(f"[ ⚠️ ] User {user.id} is {user_role}, not buyer")
-                await event.reply(
-                    f"❌ Only the buyer can set the buyer address.\n\n"
-                    f"You are registered as: <b>{user_role.upper()}</b>\n\n"
-                    f"Use /seller if you are the seller, or /addresses to view addresses.",
-                    parse_mode='html'
-                )
-                return
-            
-            # Load addresses
-            addresses = load_addresses(use_cache=True)
-            user_addresses = addresses.get(str(user.id), {})
-            user_address = user_addresses.get("buyer_address")
-            
-            # Load address history for suggestions
-            history = load_address_history()
-            user_history = history.get(str(user.id), [])
-            buyer_history = [h for h in user_history if h.get('type') == 'buyer']
-            
-            # Build response message
-            if user_address:
-                # Show existing address with preview
-                preview = format_address_for_display(user_address)
-                await event.reply(
-                    f"📋 <b>Your Current Buyer Address</b>\n\n"
-                    f"<code>{user_address}</code>\n\n"
-                    f"<b>Preview:</b> {preview}\n"
-                    f"<b>Length:</b> {len(user_address)} characters\n"
-                    f"<b>Set on:</b> {user_addresses.get('buyer_updated', 'Unknown')}\n\n"
-                    f"Do you want to update it?\n\n"
-                    f"Send your new address or type /cancel to keep current.\n\n"
-                    f"<i>Note: Previous addresses will be saved in your history.</i>",
-                    parse_mode='html'
-                )
-            else:
-                # Ask for address with examples
-                example_text = ""
-                if buyer_history:
-                    recent = buyer_history[0]['address']
-                    example_text = f"\n💡 <b>Recent address example:</b>\n<code>{format_address_for_display(recent, 30)}</code>\n"
-                
-                await event.reply(
-                    f"{BUYER_ADDRESS_PROMPT}\n\n"
-                    f"<b>Guidelines:</b>\n"
-                    f"• Minimum {MIN_ADDRESS_LENGTH} characters\n"
-                    f"• Maximum {MAX_ADDRESS_LENGTH} characters\n"
-                    f"• Can include letters, numbers, and special characters\n"
-                    f"• Will be visible to all participants\n"
-                    f"{example_text}",
-                    parse_mode='html'
-                )
-            
-            # Set user state to wait for buyer address
-            client.address_state[user.id] = {
-                "type": "buyer",
-                "group_id": group_id,
-                "chat_id": event.chat_id,
-                "timestamp": time.time(),
-                "original_role": user_role,
-                "original_name": user_name,
-                "message_id": event.id
-            }
-            
-            # Store temp data for potential recovery
-            client.address_temp_data[user.id] = {
-                "last_command": "buyer",
-                "timestamp": time.time(),
-                "chat_id": event.chat_id
-            }
-            
-            # Update stats
-            update_address_stats('view', 'buyer')
-            
-            # Performance tracking
-            elapsed = time.time() - start_time
-            print(f"[ BUYER ] Handler completed in {elapsed:.2f}s")
-            
-        except FloodWaitError as e:
-            print(f"[FLOOD] Rate limited: {e.seconds}s")
-            await event.reply(f"⚠️ Too many requests. Please wait {e.seconds} seconds.")
-        except Exception as e:
-            print(f"[ERROR] /buyer handler: {e}")
-            import traceback
-            traceback.print_exc()
-            await event.reply("❌ An error occurred. Please try again later.")
-    
-    @client.on(events.NewMessage(pattern='/seller'))
-    async def seller_address_handler(event):
-        """Handle /seller command - Set seller address"""
-        try:
-            # Start time for performance tracking
-            start_time = time.time()
-            
-            # Get user and chat info
-            user = await event.get_sender()
-            chat = await event.get_chat()
-            
-            if not user or not chat:
-                await event.reply("❌ Could not identify user or chat.")
-                return
-            
-            # Check if user is blacklisted
-            is_blocked, reason = is_blacklisted(user)
-            if is_blocked:
-                await event.reply(f"❌ You are blacklisted: {reason}")
-                return
-            
-            # Get and clean group ID
-            raw_chat_id = str(event.chat_id)
-            group_id = clean_group_id(raw_chat_id)
-            
-            print(f"[ SELLER ] Command from user {user.id} in chat {raw_chat_id}")
-            print(f"[ SELLER ] Cleaned group_id: {group_id}")
-            print(f"[ SELLER ] User details - Username: {user.username}, First: {user.first_name}")
-            
-            # Load roles with cache
-            roles = load_user_roles(use_cache=True)
-            
-            # Debug: Print all stored role keys
-            print(f"[ SELLER ] Stored role keys: {list(roles.keys())}")
-            
-            # Check if group exists in roles
-            if group_id not in roles:
-                print(f"[ SELLER ] Group {group_id} not found in roles")
-                
-                # Try to find by name as fallback
-                found = False
-                chat_title = getattr(chat, 'title', '')
-                if chat_title:
-                    for key, data in roles.items():
-                        if data.get('name') == chat_title:
-                            group_id = key
-                            found = True
-                            print(f"[ SELLER ] Found group by name: {key}")
-                            break
-                
-                if not found:
-                    await event.reply(
-                        "❌ No active escrow session found in this group.\n\n"
-                        "Use /begin to start a session first.",
-                        parse_mode='html'
-                    )
-                    return
-            
-            # Get roles for this group
-            group_roles = roles.get(group_id, {})
-            
-            # Check if user has a role
-            user_data = group_roles.get(str(user.id))
-            
-            if not user_data:
-                print(f"[ ⚠️ ] User {user.id} has no role in chat {group_id}")
-                
-                # List all users in this group for debugging
-                print(f"[ SELLER ] Users in group {group_id}: {list(group_roles.keys())}")
-                
-                await event.reply(
-                    "❌ You don't have a role in this escrow session.\n\n"
-                    "Only the designated buyer or seller can set addresses.\n\n"
-                    "If you believe this is an error:\n"
-                    "1️⃣ Check that you are one of the two selected participants\n"
-                    "2️⃣ The session may have expired\n"
-                    "3️⃣ Use /begin to start a new session",
-                    parse_mode='html'
-                )
-                return
-            
-            user_role = user_data.get("role")
-            user_name = user_data.get("name", get_user_display(user))
-            
-            if user_role != "seller":
-                print(f"[ ⚠️ ] User {user.id} is {user_role}, not seller")
-                await event.reply(
-                    f"❌ Only the seller can set the seller address.\n\n"
-                    f"You are registered as: <b>{user_role.upper()}</b>\n\n"
-                    f"Use /buyer if you are the buyer, or /addresses to view addresses.",
-                    parse_mode='html'
-                )
-                return
-            
-            # Load addresses
-            addresses = load_addresses(use_cache=True)
-            user_addresses = addresses.get(str(user.id), {})
-            user_address = user_addresses.get("seller_address")
-            
-            # Load address history for suggestions
-            history = load_address_history()
-            user_history = history.get(str(user.id), [])
-            seller_history = [h for h in user_history if h.get('type') == 'seller']
-            
-            # Build response message
-            if user_address:
-                # Show existing address with preview
-                preview = format_address_for_display(user_address)
-                await event.reply(
-                    f"📋 <b>Your Current Seller Address</b>\n\n"
-                    f"<code>{user_address}</code>\n\n"
-                    f"<b>Preview:</b> {preview}\n"
-                    f"<b>Length:</b> {len(user_address)} characters\n"
-                    f"<b>Set on:</b> {user_addresses.get('seller_updated', 'Unknown')}\n\n"
-                    f"Do you want to update it?\n\n"
-                    f"Send your new address or type /cancel to keep current.\n\n"
-                    f"<i>Note: Previous addresses will be saved in your history.</i>",
-                    parse_mode='html'
-                )
-            else:
-                # Ask for address with examples
-                example_text = ""
-                if seller_history:
-                    recent = seller_history[0]['address']
-                    example_text = f"\n💡 <b>Recent address example:</b>\n<code>{format_address_for_display(recent, 30)}</code>\n"
-                
-                await event.reply(
-                    f"{SELLER_ADDRESS_PROMPT}\n\n"
-                    f"<b>Guidelines:</b>\n"
-                    f"• Minimum {MIN_ADDRESS_LENGTH} characters\n"
-                    f"• Maximum {MAX_ADDRESS_LENGTH} characters\n"
-                    f"• Can include letters, numbers, and special characters\n"
-                    f"• Will be visible to all participants\n"
-                    f"{example_text}",
-                    parse_mode='html'
-                )
-            
-            # Set user state to wait for seller address
-            client.address_state[user.id] = {
-                "type": "seller",
-                "group_id": group_id,
-                "chat_id": event.chat_id,
-                "timestamp": time.time(),
-                "original_role": user_role,
-                "original_name": user_name,
-                "message_id": event.id
-            }
-            
-            # Store temp data for potential recovery
-            client.address_temp_data[user.id] = {
-                "last_command": "seller",
-                "timestamp": time.time(),
-                "chat_id": event.chat_id
-            }
-            
-            # Update stats
-            update_address_stats('view', 'seller')
-            
-            # Performance tracking
-            elapsed = time.time() - start_time
-            print(f"[ SELLER ] Handler completed in {elapsed:.2f}s")
-            
-        except FloodWaitError as e:
-            print(f"[FLOOD] Rate limited: {e.seconds}s")
-            await event.reply(f"⚠️ Too many requests. Please wait {e.seconds} seconds.")
-        except Exception as e:
-            print(f"[ERROR] /seller handler: {e}")
-            import traceback
-            traceback.print_exc()
-            await event.reply("❌ An error occurred. Please try again later.")
-    
-    @client.on(events.NewMessage(pattern='/addresses'))
-    async def addresses_menu_handler(event):
-        """Handle /addresses command - Show addresses menu"""
-        try:
-            # Start time for performance tracking
-            start_time = time.time()
-            
-            # Get user and chat info
-            user = await event.get_sender()
-            chat = await event.get_chat()
-            
-            if not user or not chat:
-                await event.reply("❌ Could not identify user or chat.")
-                return
-            
-            # Check if user is blacklisted
-            is_blocked, reason = is_blacklisted(user)
-            if is_blocked:
-                await event.reply(f"❌ You are blacklisted: {reason}")
-                return
-            
-            # Get and clean group ID
-            raw_chat_id = str(event.chat_id)
-            group_id = clean_group_id(raw_chat_id)
-            
-            print(f"[ ADDRESSES ] Command from user {user.id} in chat {raw_chat_id}")
-            print(f"[ ADDRESSES ] Cleaned group_id: {group_id}")
-            
-            # Load roles and addresses with cache
-            roles = load_user_roles(use_cache=True)
-            addresses = load_addresses(use_cache=True)
-            
-            # Get user's role in this group
-            group_roles = roles.get(group_id, {})
-            user_data = group_roles.get(str(user.id))
-            
-            if not user_data:
-                await event.reply(
-                    "❌ You don't have a role in this escrow session.\n\n"
-                    "Use /begin to start a session first.",
-                    parse_mode='html'
-                )
-                return
-            
-            user_role = user_data.get("role")
-            user_name = user_data.get("name", get_user_display(user))
-            
-            # Get addresses for this group
-            buyer_id = None
-            seller_id = None
-            buyer_name = None
-            seller_name = None
-            
-            for uid, data in group_roles.items():
-                if data.get("role") == "buyer":
-                    buyer_id = uid
-                    buyer_name = data.get("name", f"User_{uid}")
-                elif data.get("role") == "seller":
-                    seller_id = uid
-                    seller_name = data.get("name", f"User_{uid}")
-            
-            # Get addresses from storage with metadata
-            buyer_address = None
-            seller_address = None
-            buyer_updated = None
-            seller_updated = None
-            
-            if buyer_id:
-                buyer_data = addresses.get(str(buyer_id), {})
-                buyer_address = buyer_data.get("buyer_address")
-                buyer_updated = buyer_data.get("buyer_updated")
-            
-            if seller_id:
-                seller_data = addresses.get(str(seller_id), {})
-                seller_address = seller_data.get("seller_address")
-                seller_updated = seller_data.get("seller_updated")
-            
-            # Format addresses display with metadata
-            if buyer_address:
-                buyer_preview = format_address_for_display(buyer_address)
-                buyer_display = f"<code>{buyer_address}</code>\n"
-                buyer_display += f"<b>Preview:</b> {buyer_preview}\n"
-                if buyer_updated:
-                    buyer_display += f"<b>Updated:</b> {buyer_updated}"
-                else:
-                    buyer_display += f"<b>Status:</b> ✅ Set"
-            else:
-                buyer_display = "❌ <b>Not set</b>"
-            
-            if seller_address:
-                seller_preview = format_address_for_display(seller_address)
-                seller_display = f"<code>{seller_address}</code>\n"
-                seller_display += f"<b>Preview:</b> {seller_preview}\n"
-                if seller_updated:
-                    seller_display += f"<b>Updated:</b> {seller_updated}"
-                else:
-                    seller_display += f"<b>Status:</b> ✅ Set"
-            else:
-                seller_display = "❌ <b>Not set</b>"
-            
-            # Create message with participant names
-            message = f"<b>📋 ESCROW ADDRESSES</b>\n\n"
-            message += f"<b>Group:</b> {getattr(chat, 'title', 'Unknown')}\n"
-            message += f"<b>Your role:</b> {user_role.upper()}\n\n"
-            
-            message += f"<b>👤 BUYER</b> - {buyer_name}\n"
-            message += f"{buyer_display}\n\n"
-            
-            message += f"<b>👤 SELLER</b> - {seller_name}\n"
-            message += f"{seller_display}\n\n"
-            
-            message += f"<i>Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
-            
-            # Get buttons based on user role
-            buttons = get_addresses_menu_buttons(user_role)
-            
-            await event.reply(message, buttons=buttons, parse_mode='html')
-            
-            # Update stats
-            update_address_stats('view')
-            
-            # Performance tracking
-            elapsed = time.time() - start_time
-            print(f"[ ADDRESSES ] Handler completed in {elapsed:.2f}s")
-            
-        except FloodWaitError as e:
-            print(f"[FLOOD] Rate limited: {e.seconds}s")
-            await event.reply(f"⚠️ Too many requests. Please wait {e.seconds} seconds.")
-        except Exception as e:
-            print(f"[ERROR] /addresses handler: {e}")
-            import traceback
-            traceback.print_exc()
-            await event.reply("❌ An error occurred. Please try again later.")
-    
-    @client.on(events.CallbackQuery(pattern=b'address_my'))
-    async def address_my_handler(event):
-        """Handle 'My Address' button - Show user's own address"""
-        try:
-            user = await event.get_sender()
-            
-            if not user:
-                await event.answer("❌ Could not identify user", alert=True)
-                return
-            
-            # Get and clean group ID
-            raw_chat_id = str(event.chat_id)
-            group_id = clean_group_id(raw_chat_id)
-            
-            # Load roles
-            roles = load_user_roles()
-            group_roles = roles.get(group_id, {})
-            user_data = group_roles.get(str(user.id))
-            
-            if not user_data:
-                await event.answer("❌ You don't have a role in this session", alert=True)
-                return
-            
-            user_role = user_data.get("role")
-            user_name = user_data.get("name", get_user_display(user))
-            
-            # Load addresses
-            addresses = load_addresses()
-            user_addresses = addresses.get(str(user.id), {})
-            
-            if user_role == "buyer":
-                address = user_addresses.get("buyer_address")
-                address_type = "Buyer"
-                updated = user_addresses.get("buyer_updated")
-            else:
-                address = user_addresses.get("seller_address")
-                address_type = "Seller"
-                updated = user_addresses.get("seller_updated")
-            
-            if address:
-                # Format message with address details
-                message = f"<b>Your {address_type} Address</b>\n\n"
-                message += f"<code>{address}</code>\n\n"
-                message += f"<b>Length:</b> {len(address)} characters\n"
-                if updated:
-                    message += f"<b>Last updated:</b> {updated}\n"
-                message += f"\n<i>This address is visible to all participants.</i>"
-                
-                await event.edit(message, buttons=get_back_button(), parse_mode='html')
-            else:
-                await event.answer(
-                    f"❌ You haven't set your {address_type} address yet. Use /{user_role} to set it.",
-                    alert=True
-                )
-            
-            # Update stats
-            update_address_stats('view')
-                
-        except Exception as e:
-            print(f"[ERROR] address_my handler: {e}")
-            await event.answer("❌ Error displaying address", alert=True)
-    
-    @client.on(events.CallbackQuery(pattern=b'address_buyer'))
-    async def address_buyer_handler(event):
-        """Handle 'Buyer Address' button - Show buyer's address"""
-        try:
-            user = await event.get_sender()
-            
-            # Get and clean group ID
-            raw_chat_id = str(event.chat_id)
-            group_id = clean_group_id(raw_chat_id)
-            
-            # Load roles
-            roles = load_user_roles()
-            group_roles = roles.get(group_id, {})
-            
-            # Find buyer ID and name
-            buyer_id = None
-            buyer_name = None
-            for uid, data in group_roles.items():
-                if data.get("role") == "buyer":
-                    buyer_id = uid
-                    buyer_name = data.get("name", f"User_{uid}")
-                    break
-            
-            if not buyer_id:
-                await event.answer("❌ Buyer not found in this session", alert=True)
-                return
-            
-            # Load addresses
-            addresses = load_addresses()
-            buyer_data = addresses.get(str(buyer_id), {})
-            buyer_address = buyer_data.get("buyer_address")
-            buyer_updated = buyer_data.get("buyer_updated")
-            
-            if buyer_address:
-                # Format message with address details
-                message = f"<b>👤 Buyer: {buyer_name}</b>\n\n"
-                message += f"<code>{buyer_address}</code>\n\n"
-                message += f"<b>Length:</b> {len(buyer_address)} characters\n"
-                if buyer_updated:
-                    message += f"<b>Set on:</b> {buyer_updated}\n"
-                
-                await event.edit(message, buttons=get_back_button(), parse_mode='html')
-            else:
-                await event.answer(
-                    "❌ Buyer hasn't set their address yet",
-                    alert=True
-                )
-            
-            # Update stats
-            update_address_stats('view')
-                
-        except Exception as e:
-            print(f"[ERROR] address_buyer handler: {e}")
-            await event.answer("❌ Error displaying buyer address", alert=True)
-    
-    @client.on(events.CallbackQuery(pattern=b'address_seller'))
-    async def address_seller_handler(event):
-        """Handle 'Seller Address' button - Show seller's address"""
-        try:
-            user = await event.get_sender()
-            
-            # Get and clean group ID
-            raw_chat_id = str(event.chat_id)
-            group_id = clean_group_id(raw_chat_id)
-            
-            # Load roles
-            roles = load_user_roles()
-            group_roles = roles.get(group_id, {})
-            
-            # Find seller ID and name
-            seller_id = None
-            seller_name = None
-            for uid, data in group_roles.items():
-                if data.get("role") == "seller":
-                    seller_id = uid
-                    seller_name = data.get("name", f"User_{uid}")
-                    break
-            
-            if not seller_id:
-                await event.answer("❌ Seller not found in this session", alert=True)
-                return
-            
-            # Load addresses
-            addresses = load_addresses()
-            seller_data = addresses.get(str(seller_id), {})
-            seller_address = seller_data.get("seller_address")
-            seller_updated = seller_data.get("seller_updated")
-            
-            if seller_address:
-                # Format message with address details
-                message = f"<b>👤 Seller: {seller_name}</b>\n\n"
-                message += f"<code>{seller_address}</code>\n\n"
-                message += f"<b>Length:</b> {len(seller_address)} characters\n"
-                if seller_updated:
-                    message += f"<b>Set on:</b> {seller_updated}\n"
-                
-                await event.edit(message, buttons=get_back_button(), parse_mode='html')
-            else:
-                await event.answer(
-                    "❌ Seller hasn't set their address yet",
-                    alert=True
-                )
-            
-            # Update stats
-            update_address_stats('view')
-                
-        except Exception as e:
-            print(f"[ERROR] address_seller handler: {e}")
-            await event.answer("❌ Error displaying seller address", alert=True)
-    
-    @client.on(events.CallbackQuery(pattern=b'address_reset'))
-    async def address_reset_handler(event):
-        """Handle 'Reset Addresses' button - Reset both addresses"""
-        try:
-            user = await event.get_sender()
-            
-            if not user:
-                await event.answer("❌ Could not identify user", alert=True)
-                return
-            
-            # Get and clean group ID
-            raw_chat_id = str(event.chat_id)
-            group_id = clean_group_id(raw_chat_id)
-            
-            # Load roles
-            roles = load_user_roles()
-            group_roles = roles.get(group_id, {})
-            
-            # Check if user is admin or creator
-            chat = await event.get_chat()
-            is_creator = False
-            is_admin = False
-            
-            try:
-                participants = await client.get_participants(chat)
-                for participant in participants:
-                    if participant.id == user.id:
-                        if hasattr(participant, 'participant'):
-                            if isinstance(participant.participant, ChannelParticipantCreator):
-                                is_creator = True
-                                break
-                            elif hasattr(participant.participant, 'admin_rights'):
-                                if participant.participant.admin_rights:
-                                    is_admin = True
-                                    break
-            except Exception as e:
-                print(f"[ERROR] Checking admin status: {e}")
-            
-            if not (is_creator or is_admin):
-                await event.answer("❌ Only group creator or admin can reset addresses", alert=True)
-                return
-            
-            # Load addresses
-            addresses = load_addresses()
-            
-            # Remove addresses for this group's participants
-            reset_count = 0
-            reset_details = []
-            
-            for uid in group_roles.keys():
-                if uid in addresses:
-                    changed = False
-                    if "buyer_address" in addresses[uid]:
-                        # Save to history before removing
-                        if addresses[uid]["buyer_address"]:
-                            add_to_address_history(uid, "buyer", addresses[uid]["buyer_address"])
-                        del addresses[uid]["buyer_address"]
-                        if "buyer_updated" in addresses[uid]:
-                            del addresses[uid]["buyer_updated"]
-                        changed = True
-                        reset_details.append(f"Buyer {uid}")
-                    
-                    if "seller_address" in addresses[uid]:
-                        # Save to history before removing
-                        if addresses[uid]["seller_address"]:
-                            add_to_address_history(uid, "seller", addresses[uid]["seller_address"])
-                        del addresses[uid]["seller_address"]
-                        if "seller_updated" in addresses[uid]:
-                            del addresses[uid]["seller_updated"]
-                        changed = True
-                        reset_details.append(f"Seller {uid}")
-                    
-                    if changed:
-                        reset_count += 1
-                    
-                    # If user has no addresses left, remove them
-                    if not addresses[uid]:
-                        del addresses[uid]
-            
-            save_addresses(addresses)
-            
-            # Format reset details
-            details_text = "\n".join(reset_details[:5])
-            if len(reset_details) > 5:
-                details_text += f"\n... and {len(reset_details) - 5} more"
-            
-            await event.edit(
-                f"✅ <b>Addresses Reset Complete</b>\n\n"
-                f"<b>Total resets:</b> {reset_count}\n"
-                f"<b>Groups affected:</b> 1\n\n"
-                f"<b>Details:</b>\n{details_text if details_text else 'No addresses were reset'}",
-                buttons=get_back_button(),
-                parse_mode='html'
             )
+            print("[SUCCESS] Group photo updated via messages.EditChatPhotoRequest")
+            return True
+        except Exception as e1:
+            print(f"[DEBUG] Normal group photo update failed: {e1}")
             
-            print(f"[ ADDRESSES ] Reset {reset_count} addresses by {user.id}")
+            # Fallback for supergroups / channels
+            try:
+                await client(
+                    functions.channels.EditPhotoRequest(
+                        channel=chat,
+                        photo=types.InputChatUploadedPhoto(file=file)
+                    )
+                )
+                print("[SUCCESS] Group photo updated via channels.EditPhotoRequest")
+                return True
+            except Exception as e2:
+                print(f"[DEBUG] Channel photo update failed: {e2}")
+                
+                # Try the simple edit_photo method as last resort
+                try:
+                    await client.edit_photo(chat, photo=photo_path)
+                    print("[SUCCESS] Group photo updated via edit_photo")
+                    return True
+                except Exception as e3:
+                    print(f"[DEBUG] Simple edit_photo failed: {e3}")
+                    raise Exception(f"All photo update methods failed: {e1}, {e2}, {e3}")
+
+    except Exception as e:
+        print(f"[ERROR] set_group_photo: {e}")
+        raise e
+
+async def download_profile_picture(client, user_id):
+    """Download user's profile picture"""
+    try:
+        print(f"[PHOTO] Downloading profile picture for user_id: {user_id}")
+        
+        # Get user entity
+        user = await client.get_entity(user_id)
+        
+        # Download profile photo as bytes
+        photo_bytes = await client.download_profile_photo(user, file=bytes)
+        
+        if photo_bytes:
+            # Open from BytesIO
+            img = Image.open(BytesIO(photo_bytes)).convert("RGBA")
+            print(f"[PHOTO] Successfully downloaded profile picture for {user_id}")
+            return img
+        else:
+            # No profile picture, use fallback
+            print(f"[PHOTO] No profile picture for {user_id}, using fallback")
+            return load_unknown_pfp()
             
-            # Update stats
-            update_address_stats('reset')
+    except Exception as e:
+        print(f"[ERROR] Downloading profile picture for {user_id}: {e}")
+        return load_unknown_pfp()
+
+def load_unknown_pfp():
+    """Load the unknown.png fallback image"""
+    try:
+        if os.path.exists(UNKNOWN_PFP):
+            img = Image.open(UNKNOWN_PFP).convert("RGBA")
+            print(f"[PHOTO] Loaded unknown.png fallback")
+            return img
+        else:
+            # Create a simple fallback if unknown.png doesn't exist
+            print(f"[WARNING] {UNKNOWN_PFP} not found, creating default fallback")
+            return create_default_fallback()
+    except Exception as e:
+        print(f"[ERROR] Loading unknown.png: {e}")
+        return create_default_fallback()
+
+def create_default_fallback():
+    """Create a default fallback image"""
+    try:
+        # Create a 400x400 image with question mark
+        size = (400, 400)
+        image = Image.new('RGBA', size, (100, 100, 100, 255))
+        draw = ImageDraw.Draw(image)
+        
+        # Draw circle
+        center_x, center_y = size[0] // 2, size[1] // 2
+        radius = min(center_x, center_y) - 20
+        
+        draw.ellipse(
+            [(center_x - radius, center_y - radius),
+             (center_x + radius, center_y + radius)],
+            fill=(200, 200, 200, 255)
+        )
+        
+        # Add question mark
+        try:
+            font = ImageFont.truetype("arial.ttf", 120)
+        except:
+            font = ImageFont.load_default()
+        
+        draw.text(
+            (center_x, center_y),
+            "?",
+            fill=(100, 100, 100, 255),
+            anchor="mm",
+            font=font
+        )
+        
+        return image
+        
+    except Exception as e:
+        print(f"[ERROR] Creating default fallback: {e}")
+        # Last resort: solid color image
+        return Image.new('RGBA', (400, 400), (100, 100, 100, 255))
+
+def create_circular_mask(size, radius):
+    """Create a circular mask"""
+    mask = Image.new('L', size, 0)
+    draw = ImageDraw.Draw(mask)
+    center_x, center_y = size[0] // 2, size[1] // 2
+    draw.ellipse(
+        [(center_x - radius, center_y - radius),
+         (center_x + radius, center_y + radius)],
+        fill=255
+    )
+    return mask
+
+async def create_merged_photo(client, buyer_id, seller_id):
+    """Create merged photo with both profile pictures for /begin preview"""
+    try:
+        # Load config
+        if os.path.exists(PFP_CONFIG_PATH):
+            with open(PFP_CONFIG_PATH, 'r') as f:
+                config = json.load(f)
+        else:
+            config = {
+                "BUYER_PFP": {"center_x": 470, "center_y": 384, "radius": 177},
+                "SELLER_PFP": {"center_x": 920, "center_y": 384, "radius": 177}
+            }
+        
+        # Check base image exists
+        if not os.path.exists(BASE_START_IMAGE):
+            print(f"[ERROR] Base image not found: {BASE_START_IMAGE}")
+            return False, None, "Base image not found"
+        
+        # Download profile pictures
+        buyer_pfp = await download_profile_picture(client, buyer_id)
+        seller_pfp = await download_profile_picture(client, seller_id)
+        
+        # Load base image
+        base_img = Image.open(BASE_START_IMAGE).convert('RGBA')
+        
+        # Get coordinates from config
+        buyer_config = config.get("BUYER_PFP", {})
+        seller_config = config.get("SELLER_PFP", {})
+        
+        buyer_x = buyer_config.get("center_x", 470)
+        buyer_y = buyer_config.get("center_y", 384)
+        buyer_radius = buyer_config.get("radius", 177)
+        
+        seller_x = seller_config.get("center_x", 920)
+        seller_y = seller_config.get("center_y", 384)
+        seller_radius = seller_config.get("radius", 177)
+        
+        # Resize profile pictures to match circle diameters
+        buyer_size = (buyer_radius * 2, buyer_radius * 2)
+        seller_size = (seller_radius * 2, seller_radius * 2)
+        
+        buyer_pfp = buyer_pfp.resize(buyer_size, Image.Resampling.LANCZOS)
+        seller_pfp = seller_pfp.resize(seller_size, Image.Resampling.LANCZOS)
+        
+        # Create circular masks
+        buyer_mask = create_circular_mask(buyer_size, buyer_radius)
+        seller_mask = create_circular_mask(seller_size, seller_radius)
+        
+        # Calculate positions (center to top-left)
+        buyer_pos = (buyer_x - buyer_radius, buyer_y - buyer_radius)
+        seller_pos = (seller_x - seller_radius, seller_y - seller_radius)
+        
+        # Paste buyer PFP
+        base_img.paste(buyer_pfp, buyer_pos, buyer_mask)
+        
+        # Paste seller PFP
+        base_img.paste(seller_pfp, seller_pos, seller_mask)
+        
+        # Convert to bytes
+        img_bytes = BytesIO()
+        base_img.save(img_bytes, format='PNG')
+        img_bytes.seek(0)
+        
+        return True, img_bytes, "✅ Merged photo created"
+        
+    except Exception as e:
+        print(f"[ERROR] Creating merged photo: {e}")
+        import traceback
+        traceback.print_exc()
+        return False, None, f"❌ Error creating merged photo: {e}"
+
+class EscrowBot:
+    def __init__(self):
+        self.client = TelegramClient('escrow_bot', API_ID, API_HASH)
+        self.setup_handlers()
+    
+    def setup_handlers(self):
+        """Setup all event handlers"""
+        
+        @self.client.on(events.NewMessage(pattern='/start'))
+        async def start_handler(event):
+            await handle_start(event)
+        
+        @self.client.on(events.CallbackQuery(pattern=b'create'))
+        async def create_handler(event):
+            await handle_create(event)
+        
+        @self.client.on(events.CallbackQuery(pattern=b'create_p2p'))
+        async def create_p2p_handler(event):
+            await handle_create_p2p(event)
+        
+        @self.client.on(events.CallbackQuery(pattern=b'create_other'))
+        async def create_other_handler(event):
+            await handle_create_other(event)
+        
+        @self.client.on(events.CallbackQuery(pattern=b'stats'))
+        async def stats_handler(event):
+            await handle_stats(event)
+        
+        @self.client.on(events.CallbackQuery(pattern=b'about'))
+        async def about_handler(event):
+            await handle_about(event)
+        
+        @self.client.on(events.CallbackQuery(pattern=b'help'))
+        async def help_handler(event):
+            await handle_help(event)
+        
+        @self.client.on(events.CallbackQuery(pattern=b'back_to_main'))
+        async def back_handler(event):
+            try:
+                await event.edit(
+                    START_MESSAGE,
+                    buttons=get_main_menu_buttons(),
+                    parse_mode='html'
+                )
+            except Exception as e:
+                await event.answer("❌ An error occurred.", alert=True)
+        
+        # Handle /begin command
+        @self.client.on(events.NewMessage(pattern='/begin'))
+        async def begin_handler(event):
+            await self.handle_begin_command(event)
+        
+        # Handle role selection
+        @self.client.on(events.CallbackQuery(pattern=rb'role_'))
+        async def role_handler(event):
+            await self.handle_role_selection(event)
+        
+        # Setup address handlers
+        setup_address_handlers(self.client)
+        
+        # Handle new users joining
+        @self.client.on(events.ChatAction)
+        async def handle_chat_action(event):
+            await self.handle_new_member(event)
+        
+        # Delete system messages only
+        @self.client.on(events.NewMessage)
+        async def handle_all_messages(event):
+            """Delete system messages only"""
+            try:
+                message_text = event.text or ""
+                
+                # Check if system message
+                is_system = False
+                if event.sender_id == 777000 or event.sender_id == 1087968824:
+                    is_system = True
+                elif any(pattern in message_text.lower() for pattern in [
+                    "joined the group", "was added", "created the group", 
+                    "left the group", "pinned a message"
+                ]):
+                    is_system = True
+                
+                if is_system:
+                    try:
+                        await event.delete()
+                    except:
+                        pass
+                    
+            except:
+                pass
+    
+    async def handle_new_member(self, event):
+        """Handle new members joining the group"""
+        try:
+            # Check if this is a user joining event safely
+            if hasattr(event, 'user_joined') and event.user_joined:
+                # Get the chat
+                chat = await event.get_chat()
+                
+                # Get the new member(s) safely
+                if hasattr(event, 'action_message') and event.action_message:
+                    if hasattr(event.action_message, 'action') and event.action_message.action:
+                        if hasattr(event.action_message.action, 'users'):
+                            users = event.action_message.action.users
+                            
+                            for user_id in users:
+                                try:
+                                    # Get user info
+                                    user = await event.client.get_entity(user_id)
+                                    
+                                    # Check if it's a bot
+                                    if hasattr(user, 'bot') and user.bot:
+                                        continue
+                                    
+                                    # Get user display name
+                                    user_display = get_user_display(user)
+                                    
+                                    # Check blacklist
+                                    is_blocked, reason = is_blacklisted(user)
+                                    if is_blocked:
+                                        # If blacklisted, remove them
+                                        try:
+                                            await event.client.kick_participant(chat, user_id)
+                                            print(f"[BLACKLIST] Removed blacklisted user {user_display} from {chat.title}")
+                                        except:
+                                            pass
+                                        continue
+                                    
+                                    # Send welcome message
+                                    welcome_text = JOIN_MESSAGE.format(
+                                        user_mention=f"<a href='tg://user?id={user_id}'>{user_display}</a>"
+                                    )
+                                    
+                                    await event.client.send_message(
+                                        chat,
+                                        welcome_text,
+                                        parse_mode='html'
+                                    )
+                                    
+                                    print(f"[JOIN] New member joined: {user_display} in {chat.title}")
+                                    
+                                except Exception as e:
+                                    print(f"[ERROR] Processing new member: {e}")
+                        
+        except Exception as e:
+            print(f"[ERROR] Handle new member: {e}")
+    
+    async def get_group_owner_id(self, chat):
+        """Get the Telegram user ID of the group owner/creator"""
+        try:
+            # Check admin participants for creator flag
+            try:
+                participants = await self.client.get_participants(
+                    chat, 
+                    filter=types.ChannelParticipantsAdmins()
+                )
+                
+                for participant in participants:
+                    if hasattr(participant, 'participant'):
+                        if isinstance(participant.participant, ChannelParticipantCreator):
+                            return participant.id
+            except:
+                pass
+            
+            # Check full chat info
+            try:
+                if hasattr(chat, 'megagroup') and chat.megagroup:
+                    full_chat = await self.client(
+                        functions.channels.GetFullChannelRequest(chat)
+                    )
+                    if hasattr(full_chat, 'full_chat') and hasattr(full_chat.full_chat, 'creator_id'):
+                        return full_chat.full_chat.creator_id
+            except:
+                pass
+            
+            return None
             
         except Exception as e:
-            print(f"[ERROR] address_reset handler: {e}")
+            print(f"[ERROR] Getting group owner: {e}")
+            return None
+    
+    async def handle_begin_command(self, event):
+        """Handle /begin command - Create merged photo and show role buttons"""
+        try:
+            # Get chat and user
+            chat = await event.get_chat()
+            user = await event.get_sender()
+            chat_id = str(chat.id)
+            chat_title = getattr(chat, 'title', 'Unknown')
+            
+            # Clean chat ID
+            clean_chat_id = clean_group_id(chat_id)
+            
+            # Load groups
+            groups = load_groups()
+            group_data = None
+            group_key = None
+            
+            # Find group
+            if clean_chat_id in groups:
+                group_data = groups[clean_chat_id]
+                group_key = clean_chat_id
+            elif chat_id in groups:
+                group_data = groups[chat_id]
+                group_key = chat_id
+            else:
+                for key, data in groups.items():
+                    if data.get("name") == chat_title:
+                        group_data = data
+                        group_key = key
+                        break
+            
+            if not group_data:
+                try:
+                    await event.reply(GROUP_NOT_FOUND_MESSAGE, parse_mode='html')
+                except:
+                    pass
+                return
+            
+            # Check if already initiated
+            if group_data.get("session_initiated", False):
+                try:
+                    await event.reply(SESSION_ALREADY_INITIATED_MESSAGE, parse_mode='html')
+                except:
+                    pass
+                return
+            
+            # Get participants - EXCLUDE BOT, GROUP CREATOR, AND BLACKLISTED USERS
+            try:
+                participants = await self.client.get_participants(chat)
+                eligible_users = []
+                
+                bot_id = (await self.client.get_me()).id
+                
+                print(f"[BEGIN] Total participants: {len(participants)}")
+                print(f"[BEGIN] Bot ID: {bot_id}")
+                
+                for participant in participants:
+                    participant_id = participant.id
+                    
+                    # Skip bot
+                    if participant_id == bot_id:
+                        print(f"[BEGIN] Skipping bot: {participant_id}")
+                        continue
+                    
+                    # Skip group creator
+                    if hasattr(participant, 'participant'):
+                        if isinstance(participant.participant, ChannelParticipantCreator):
+                            print(f"[BEGIN] Skipping group creator: {participant_id}")
+                            continue
+                    
+                    # Check if it's a bot account
+                    if hasattr(participant, 'bot') and participant.bot:
+                        print(f"[BEGIN] Skipping bot account: {participant_id}")
+                        continue
+                    
+                    # Check if blacklisted
+                    is_blocked, reason = is_blacklisted(participant)
+                    if is_blocked:
+                        print(f"[BEGIN] Skipping blacklisted user: {participant_id} - {reason}")
+                        continue
+                    
+                    # Add user as eligible
+                    eligible_users.append(participant)
+                    print(f"[BEGIN] Added eligible user: ID={participant_id}, Name={get_user_display(participant)}")
+                
+                member_count = len(eligible_users)
+                print(f"[BEGIN] Found {member_count} eligible users (excluding bot, creator, blacklisted)")
+                
+                # Need exactly 2 eligible users
+                if member_count != 2:
+                    if member_count < 2:
+                        try:
+                            message = WAITING_PARTICIPANTS_MESSAGE
+                            await event.reply(message, parse_mode='html')
+                        except:
+                            pass
+                    else:
+                        try:
+                            message = INSUFFICIENT_MEMBERS_MESSAGE.format(current_count=member_count)
+                            await event.reply(message, parse_mode='html')
+                        except:
+                            pass
+                    return
+                
+                # Update members
+                group_data["members"] = [u.id for u in eligible_users]
+                groups[group_key] = group_data
+                save_groups(groups)
+                
+                # Get the 2 eligible users
+                user1, user2 = eligible_users[0], eligible_users[1]
+                
+                print(f"[BEGIN] Selected users for roles:")
+                print(f"[BEGIN]   User1: ID={user1.id}, Display={get_user_display(user1)}")
+                print(f"[BEGIN]   User2: ID={user2.id}, Display={get_user_display(user2)}")
+                
+                # Create merged photo
+                success, image_bytes, message = await create_merged_photo(
+                    self.client, 
+                    user1.id, 
+                    user2.id
+                )
+                
+                if success:
+                    # Send the merged photo as preview
+                    temp_file = "temp_merged_preview.png"
+                    with open(temp_file, "wb") as f:
+                        f.write(image_bytes.getvalue())
+                    
+                    # Create caption
+                    caption = MERGED_PHOTO_CAPTION.format(
+                        user1_name=get_user_display(user1),
+                        user2_name=get_user_display(user2)
+                    )
+                    
+                    # Get buttons for role selection
+                    buttons = get_session_buttons(group_key)
+                    
+                    # Send photo with buttons
+                    await self.client.send_file(
+                        chat,
+                        temp_file,
+                        caption=caption,
+                        parse_mode='html',
+                        buttons=buttons
+                    )
+                    
+                    # Clean up temp file
+                    try:
+                        os.remove(temp_file)
+                    except:
+                        pass
+                    
+                    print(f"[PHOTO] Merged preview sent for {chat_title}")
+                else:
+                    print(f"[ERROR] Failed to create merged photo: {message}")
+                    # Send text message instead
+                    await self.client.send_message(
+                        chat,
+                        f"<b>Session Initiated</b>\n\nParticipants:\n• {get_user_display(user1)}\n• {get_user_display(user2)}\n\nPlease select your roles:",
+                        parse_mode='html',
+                        buttons=get_session_buttons(group_key)
+                    )
+                
+                # Update group
+                group_data["session_initiated"] = True
+                group_data["user1_id"] = user1.id
+                group_data["user2_id"] = user2.id
+                groups[group_key] = group_data
+                save_groups(groups)
+                
+                print(f"[SUCCESS] Session initiated in {chat_title}")
+                
+                # Log to channel if needed
+                try:
+                    creator_name = get_user_display(user)
+                    escrow_type = group_data.get("type", "P2P").upper()
+                    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    
+                    log_message = CHANNEL_LOG_CREATION.format(
+                        group_name=chat_title,
+                        escrow_type=escrow_type,
+                        timestamp=timestamp,
+                        creator_name=creator_name,
+                        creator_id=user.id,
+                        chat_id=clean_chat_id
+                    )
+                    
+                    # Send to log channel if configured
+                    # await self.client.send_message(LOG_CHANNEL_ID, log_message, parse_mode='html')
+                except Exception as e:
+                    print(f"[ERROR] Logging to channel: {e}")
+                
+            except Exception as e:
+                print(f"[ERROR] /begin: {e}")
+                import traceback
+                traceback.print_exc()
+                try:
+                    await event.reply(ERROR_MESSAGE, parse_mode='html')
+                except:
+                    pass
+            
+        except Exception as e:
+            print(f"[ERROR] Handling /begin: {e}")
             import traceback
             traceback.print_exc()
-            await event.answer("❌ Error resetting addresses", alert=True)
     
-    @client.on(events.CallbackQuery(pattern=b'address_back'))
-    async def address_back_handler(event):
-        """Handle back button from addresses menu"""
+    async def handle_role_selection(self, event):
+        """Handle role selection - Generate final PFP logo and update group photo"""
         try:
-            user = await event.get_sender()
-            
-            if not user:
-                await event.answer("❌ Could not identify user", alert=True)
+            # Get user
+            sender = await event.get_sender()
+            if not sender:
+                await event.answer("❌ Cannot identify user", alert=True)
                 return
             
-            # Get and clean group ID
-            raw_chat_id = str(event.chat_id)
-            group_id = clean_group_id(raw_chat_id)
+            # Get data
+            data = event.data.decode('utf-8')
             
-            # Load roles
-            roles = load_user_roles()
-            group_roles = roles.get(group_id, {})
-            user_data = group_roles.get(str(user.id))
+            # Get chat
+            chat = await event.get_chat()
+            chat_id = str(chat.id)
+            chat_title = getattr(chat, 'title', 'Unknown')
             
-            if not user_data:
-                await event.answer("❌ You don't have a role", alert=True)
-                return
+            # Clean chat ID
+            clean_chat_id = clean_group_id(chat_id)
             
-            user_role = user_data.get("role")
-            
-            # Get addresses
-            addresses = load_addresses()
-            
-            # Find buyer and seller IDs and names
-            buyer_id = None
-            seller_id = None
-            buyer_name = None
-            seller_name = None
-            
-            for uid, data in group_roles.items():
-                if data.get("role") == "buyer":
-                    buyer_id = uid
-                    buyer_name = data.get("name", f"User_{uid}")
-                elif data.get("role") == "seller":
-                    seller_id = uid
-                    seller_name = data.get("name", f"User_{uid}")
-            
-            # Get addresses
-            buyer_address = None
-            seller_address = None
-            
-            if buyer_id:
-                buyer_data = addresses.get(str(buyer_id), {})
-                buyer_address = buyer_data.get("buyer_address")
-            
-            if seller_id:
-                seller_data = addresses.get(str(seller_id), {})
-                seller_address = seller_data.get("seller_address")
-            
-            # Format display
-            buyer_display = f"<code>{buyer_address}</code>" if buyer_address else "❌ Not set"
-            seller_display = f"<code>{seller_address}</code>" if seller_address else "❌ Not set"
-            
-            message = f"<b>📋 ESCROW ADDRESSES</b>\n\n"
-            message += f"<b>👤 BUYER</b> - {buyer_name}\n"
-            message += f"{buyer_display}\n\n"
-            message += f"<b>👤 SELLER</b> - {seller_name}\n"
-            message += f"{seller_display}"
-            
-            buttons = get_addresses_menu_buttons(user_role)
-            
-            await event.edit(message, buttons=buttons, parse_mode='html')
-            
-        except Exception as e:
-            print(f"[ERROR] address_back handler: {e}")
-            await event.answer("❌ Error", alert=True)
-    
-    @client.on(events.CallbackQuery(pattern=b'address_history'))
-    async def address_history_handler(event):
-        """Handle 'Address History' button - Show address history"""
-        try:
-            user = await event.get_sender()
-            
-            if not user:
-                await event.answer("❌ Could not identify user", alert=True)
-                return
-            
-            # Load address history
-            history = load_address_history()
-            user_history = history.get(str(user.id), [])
-            
-            if not user_history:
-                await event.answer("📭 No address history found", alert=True)
-                return
-            
-            # Format history message
-            message = "<b>📋 Your Address History</b>\n\n"
-            
-            for i, entry in enumerate(user_history[:10], 1):
-                addr_type = entry.get('type', 'unknown').upper()
-                addr = entry.get('address', '')
-                timestamp = entry.get('timestamp', 0)
-                
-                # Format date
-                if timestamp:
-                    date = datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M')
-                else:
-                    date = 'Unknown date'
-                
-                # Truncate address for display
-                display_addr = format_address_for_display(addr, 30)
-                
-                message += f"{i}. <b>{addr_type}</b> - {display_addr}\n"
-                message += f"   <i>{date}</i>\n\n"
-            
-            message += f"<i>Showing last {min(10, len(user_history))} of {len(user_history)} entries</i>"
-            
-            await event.edit(message, buttons=get_back_button(), parse_mode='html')
-            
-        except Exception as e:
-            print(f"[ERROR] address_history handler: {e}")
-            await event.answer("❌ Error loading history", alert=True)
-    
-    @client.on(events.CallbackQuery(pattern=b'address_stats'))
-    async def address_stats_handler(event):
-        """Handle 'Statistics' button - Show address statistics"""
-        try:
-            user = await event.get_sender()
-            
-            if not user:
-                await event.answer("❌ Could not identify user", alert=True)
-                return
-            
-            # Load stats
-            stats = load_address_stats()
-            addresses = load_addresses()
-            roles = load_user_roles()
-            
-            # Calculate statistics
-            total_addresses = len(addresses)
-            total_users = len(set([uid for uid in addresses.keys()]))
-            total_roles = sum(len(g) for g in roles.values())
-            
-            # Count by type
-            buyer_count = sum(1 for u in addresses.values() if 'buyer_address' in u)
-            seller_count = sum(1 for u in addresses.values() if 'seller_address' in u)
-            
-            # Daily stats
-            today = datetime.now().strftime('%Y-%m-%d')
-            daily = stats.get('daily', {}).get(today, {})
-            
-            message = "<b>📊 Address Statistics</b>\n\n"
-            
-            message += f"<b>Overall:</b>\n"
-            message += f"• Total addresses: {total_addresses}\n"
-            message += f"• Unique users: {total_users}\n"
-            message += f"• Active roles: {total_roles}\n"
-            message += f"• Buyers: {buyer_count}\n"
-            message += f"• Sellers: {seller_count}\n\n"
-            
-            message += f"<b>Today ({today}):</b>\n"
-            message += f"• Addresses set: {daily.get('sets', 0)}\n"
-            message += f"• Updates: {daily.get('updates', 0)}\n"
-            message += f"• Views: {daily.get('views', 0)}\n\n"
-            
-            message += f"<b>All time:</b>\n"
-            message += f"• Total actions: {stats.get('total_actions', 0)}"
-            
-            await event.edit(message, buttons=get_back_button(), parse_mode='html')
-            
-        except Exception as e:
-            print(f"[ERROR] address_stats handler: {e}")
-            await event.answer("❌ Error loading statistics", alert=True)
-    
-    # Handle address input messages
-    @client.on(events.NewMessage)
-    async def handle_address_input(event):
-        """Handle user input for addresses"""
-        try:
-            # Skip commands
-            if event.text and event.text.startswith('/'):
-                return
-            
-            # Check if user is in address input state
-            if not hasattr(client, 'address_state'):
-                return
-            
-            user_id = event.sender_id
-            
-            if user_id not in client.address_state:
-                return
-            
-            # Get state
-            state = client.address_state[user_id]
-            address_type = state.get("type")  # "buyer" or "seller"
-            group_id = state.get("group_id")
-            chat_id = state.get("chat_id")
-            timestamp = state.get("timestamp", 0)
-            original_role = state.get("original_role")
-            
-            # Check if this is the correct chat
-            if event.chat_id != chat_id:
-                return
-            
-            # Check if state is expired
-            if time.time() - timestamp > ADDRESS_TIMEOUT:
-                del client.address_state[user_id]
-                await event.reply(ADDRESS_EXPIRED_MESSAGE)
-                return
-            
-            # Get the address text
-            address_text = event.text.strip()
-            
-            # Check for cancel command
-            if address_text.lower() == '/cancel':
-                del client.address_state[user_id]
-                await event.reply("✅ Address input cancelled.")
-                return
-            
-            # Validate address
-            is_valid, validation_message = validate_address(address_text)
-            if not is_valid:
-                await event.reply(
-                    f"❌ {validation_message}\n\n"
-                    f"Please send a valid address or type /cancel to cancel."
-                )
-                return
-            
-            # Check length
-            if len(address_text) < MIN_ADDRESS_LENGTH:
-                await event.reply(
-                    f"❌ Address is too short (minimum {MIN_ADDRESS_LENGTH} characters).\n"
-                    f"Please send a valid address or type /cancel to cancel."
-                )
-                return
-            
-            if len(address_text) > MAX_ADDRESS_LENGTH:
-                await event.reply(
-                    f"❌ Address is too long (maximum {MAX_ADDRESS_LENGTH} characters).\n"
-                    f"Please send a shorter address or type /cancel to cancel."
-                )
-                return
-            
-            # Load roles to verify user still has role
-            roles = load_user_roles()
-            group_roles = roles.get(group_id, {})
-            user_data = group_roles.get(str(user_id))
-            
-            if not user_data:
-                del client.address_state[user_id]
-                await event.reply(
-                    "❌ Your role has been removed from this session.\n"
-                    "Address cannot be saved."
-                )
-                return
-            
-            user_role = user_data.get("role")
-            
-            # Verify role matches address type and hasn't changed
-            if (address_type == "buyer" and user_role != "buyer") or \
-               (address_type == "seller" and user_role != "seller"):
-                del client.address_state[user_id]
-                await event.reply(
-                    "❌ Your role has changed. Please use the appropriate command again."
-                )
-                return
-            
-            # Load existing addresses
-            addresses = load_addresses()
-            
-            # Initialize user data if not exists
-            if str(user_id) not in addresses:
-                addresses[str(user_id)] = {}
-            
-            # Check if address already exists and is the same
-            existing = addresses[str(user_id)].get(f"{address_type}_address")
-            if existing and existing == address_text:
-                await event.reply(
-                    "⚠️ This is your current address. No changes made.\n\n"
-                    "Use /addresses to view all addresses."
-                )
-                del client.address_state[user_id]
-                return
-            
-            # Save old address to history before updating
-            if existing:
-                add_to_address_history(user_id, address_type, existing)
-                action = "updated"
-                update_address_stats('update', address_type)
+            # Parse role
+            if data.startswith('role_buyer_'):
+                role = "buyer"
+                role_name = "Buyer"
+                role_emoji = "🔵"
+                group_id = data.replace('role_buyer_', '')
+            elif data.startswith('role_seller_'):
+                role = "seller"
+                role_name = "Seller"
+                role_emoji = "🟢"
+                group_id = data.replace('role_seller_', '')
             else:
-                action = "set"
-                update_address_stats('set', address_type)
+                return
             
-            # Save address based on type
-            addresses[str(user_id)][f"{address_type}_address"] = address_text
-            addresses[str(user_id)][f"{address_type}_updated"] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            # Load data
+            groups = load_groups()
+            roles = load_user_roles()
             
-            # Save to file
-            save_addresses(addresses)
+            # Find group
+            if group_id not in groups:
+                for key, data in groups.items():
+                    if data.get("name") == chat_title:
+                        group_id = key
+                        break
             
-            # Clear state
-            del client.address_state[user_id]
+            if group_id not in groups:
+                await event.answer("❌ Group not found", alert=True)
+                return
+            
+            # Get group data
+            group_data = groups.get(group_id, {})
+            
+            # Check if this user is the bot
+            bot_id = (await self.client.get_me()).id
+            if sender.id == bot_id:
+                await event.answer("❌ Bot cannot select roles", alert=True)
+                return
+            
+            # Check if this user is the group creator
+            try:
+                participants = await self.client.get_participants(chat, filter=types.ChannelParticipantsAdmins())
+                for participant in participants:
+                    if hasattr(participant, 'participant'):
+                        if isinstance(participant.participant, ChannelParticipantCreator):
+                            if participant.id == sender.id:
+                                await event.answer("❌ Group creator cannot select roles", alert=True)
+                                return
+            except:
+                pass
+            
+            # Check if this user is one of the 2 eligible users
+            eligible_user_ids = group_data.get("members", [])
+            if sender.id not in eligible_user_ids:
+                await event.answer("❌ You are not an eligible participant for this session", alert=True)
+                return
+            
+            # Initialize roles
+            if group_id not in roles:
+                roles[group_id] = {}
+            
+            # Check if already chosen
+            if str(sender.id) in roles[group_id]:
+                await event.answer(ROLE_ALREADY_CHOSEN_MESSAGE, alert=True)
+                return
+            
+            # Check if role taken
+            role_taken = any(u.get("role") == role for u in roles[group_id].values())
+            if role_taken:
+                await event.answer(ROLE_ALREADY_TAKEN_MESSAGE, alert=True)
+                return
+            
+            # Save role
+            roles[group_id][str(sender.id)] = {
+                "role": role,
+                "name": get_user_display(sender),
+                "user_id": sender.id,
+                "selected_at": time.time()
+            }
+            save_user_roles(roles)
+            
+            # Send success
+            await event.answer(f"✅ {role_name} role selected", alert=False)
             
             # Send confirmation
-            preview = format_address_for_display(address_text)
-            await event.reply(
-                ADDRESS_SAVED_MESSAGE.format(
-                    address_type=address_type.upper(),
-                    address=address_text,
-                    preview=preview,
-                    action=action
-                ),
+            if role == "buyer":
+                confirm_msg = BUYER_CONFIRMED_MESSAGE.format(
+                    buyer_id=sender.id,
+                    buyer_name=get_user_display(sender)
+                )
+            else:
+                confirm_msg = SELLER_CONFIRMED_MESSAGE.format(
+                    seller_id=sender.id,
+                    seller_name=get_user_display(sender)
+                )
+            
+            await self.client.send_message(
+                chat,
+                confirm_msg,
                 parse_mode='html'
             )
             
-            print(f"[ADDRESS] {address_type.upper()} address {action} for user {user_id}")
+            print(f"[ROLE] {get_user_display(sender)} selected as {role_name}")
             
-            # Check if both addresses are now set and notify
-            try:
-                # Find other participant
-                other_id = None
-                other_role = None
-                
-                for uid, data in group_roles.items():
-                    if data.get("role") != user_role:
-                        other_id = uid
-                        other_role = data.get("role")
-                        break
-                
-                if other_id:
-                    other_data = addresses.get(str(other_id), {})
-                    other_addr = other_data.get(f"{other_role}_address")
-                    
-                    if other_addr:
-                        # Both addresses are set
-                        await client.send_message(
-                            chat_id,
-                            ADDRESS_BOTH_SET_MESSAGE.format(
-                                buyer_role="BUYER" if user_role == "buyer" else "SELLER",
-                                seller_role="SELLER" if user_role == "buyer" else "BUYER"
-                            ),
-                            parse_mode='html'
-                        )
-                        
-                        print(f"[ADDRESS] Both addresses set in group {group_id}")
-            except Exception as e:
-                print(f"[ERROR] Notifying about both addresses: {e}")
+            # Check if both roles selected
+            buyer_count = sum(1 for u in roles[group_id].values() if u.get("role") == "buyer")
+            seller_count = sum(1 for u in roles[group_id].values() if u.get("role") == "seller")
             
+            # Announce current status
+            participants_display = []
+            for uid, data in roles[group_id].items():
+                role_emoji = "🔵" if data.get("role") == "buyer" else "🟢"
+                participants_display.append(f"{role_emoji} {data.get('name')}")
+            
+            status_msg = ROLE_ANNOUNCEMENT_MESSAGE.format(
+                mention=f"<a href='tg://user?id={sender.id}'>{get_user_display(sender)}</a>",
+                role_emoji=role_emoji,
+                role_name=role_name,
+                buyer_count=buyer_count,
+                seller_count=seller_count
+            )
+            await self.client.send_message(chat, status_msg, parse_mode='html')
+            
+            if buyer_count >= 1 and seller_count >= 1:
+                await self.finalize_session(chat, group_id, roles[group_id], group_data)
+                
         except Exception as e:
-            print(f"[ERROR] handle_address_input: {e}")
+            print(f"[ERROR] Role selection: {e}")
             import traceback
             traceback.print_exc()
-            # Clear state on error to prevent getting stuck
-            if hasattr(client, 'address_state') and 'user_id' in locals() and user_id in client.address_state:
-                del client.address_state[user_id]
-            await event.reply("❌ An error occurred while saving your address. Please try again.")
+            await event.answer("❌ Error selecting role", alert=True)
     
-    # Periodic cleanup task
-    async def cleanup_expired_states():
-        """Clean up expired address input states periodically"""
-        while True:
+    async def finalize_session(self, chat, group_id, user_roles, group_data):
+        """Finalize session after both roles selected"""
+        try:
+            # Find buyer and seller
+            buyer = None
+            seller = None
+            
+            for user_id, data in user_roles.items():
+                if data.get("role") == "buyer" and not buyer:
+                    buyer = data
+                elif data.get("role") == "seller" and not seller:
+                    seller = data
+            
+            if not buyer or not seller:
+                return
+            
+            # Get group type
+            group_type = group_data.get("type", "p2p")
+            group_type_display = "P2P" if group_type == "p2p" else "OTC"
+            
+            print(f"[FINAL] Finalizing {group_type_display} escrow")
+            
+            # Generate final PFP logo
+            await self.generate_final_pfp_logo(chat, group_id, user_roles)
+            
+            # Send wallet setup message
+            wallet_msg = WALLET_SETUP_MESSAGE.format(
+                buyer_name=buyer['name'],
+                seller_name=seller['name']
+            )
+            
+            await self.client.send_message(
+                chat,
+                wallet_msg,
+                parse_mode='html'
+            )
+            
+            print(f"[FINAL] {group_type_display} escrow finalized: {buyer['name']} ↔ {seller['name']}")
+            
+        except Exception as e:
+            print(f"[ERROR] Finalizing session: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    async def generate_final_pfp_logo(self, chat, group_id, user_roles):
+        """Generate final PFP logo and update group photo"""
+        try:
+            # Find buyer and seller
+            buyer = None
+            seller = None
+            
+            for user_id, data in user_roles.items():
+                if data.get("role") == "buyer" and not buyer:
+                    buyer = data
+                elif data.get("role") == "seller" and not seller:
+                    seller = data
+            
+            if not buyer or not seller:
+                return
+            
+            # Get group type from stored data
+            groups = load_groups()
+            group_data = groups.get(group_id, {})
+            group_type = group_data.get("type", "p2p")
+            group_type_display = "P2P" if group_type == "p2p" else "OTC"
+            
+            print(f"[PFP] Generating final logo for {group_type_display} escrow")
+            
+            # Use PFPGenerator to create logo
             try:
-                await asyncio.sleep(300)  # Run every 5 minutes
+                from utils.pfpgen import PFPGenerator
                 
-                if not hasattr(client, 'address_state'):
-                    continue
+                # Initialize PFP generator
+                pfp_gen = PFPGenerator(template_path=PFP_TEMPLATE)
                 
-                current_time = time.time()
-                expired = []
+                # Generate logo
+                success, image_bytes, message = pfp_gen.generate_logo(
+                    buyer_username=buyer['name'],
+                    buyer_user_id=buyer['user_id'],
+                    seller_username=seller['name'],
+                    seller_user_id=seller['user_id']
+                )
                 
-                for user_id, state in client.address_state.items():
-                    timestamp = state.get("timestamp", 0)
-                    if current_time - timestamp > ADDRESS_TIMEOUT:
-                        expired.append(user_id)
-                
-                for user_id in expired:
-                    del client.address_state[user_id]
-                    print(f"[CLEANUP] Removed expired address state for user {user_id}")
-                    
+                if success:
+                    try:
+                        # Save to temporary file
+                        temp_file = f"temp_final_pfp_{group_type}.png"
+                        with open(temp_file, "wb") as f:
+                            f.write(image_bytes.getvalue())
+                        
+                        # Update group photo
+                        await set_group_photo(self.client, chat, temp_file)
+                        
+                        # Clean up
+                        try:
+                            os.remove(temp_file)
+                        except:
+                            pass
+                        
+                        print(f"[PFP] Final {group_type_display} PFP logo updated!")
+                        
+                    except Exception as e:
+                        print(f"[ERROR] Could not update final group photo: {e}")
+                else:
+                    print(f"[ERROR] Failed to create final PFP logo: {message}")
+            except ImportError:
+                print(f"[WARNING] PFPGenerator not available, skipping logo generation")
             except Exception as e:
-                print(f"[ERROR] Cleanup task: {e}")
-                await asyncio.sleep(60)
+                print(f"[ERROR] PFP generation: {e}")
+            
+            # Send final confirmation
+            message_text = PARTICIPANTS_CONFIRMED_MESSAGE.format(
+                group_type_display=group_type_display,
+                buyer_name=buyer['name'],
+                seller_name=seller['name']
+            )
+            
+            await self.client.send_message(
+                chat,
+                message_text,
+                parse_mode='html'
+            )
+            
+            # Send escrow ready message
+            ready_msg = ESCROW_READY_MESSAGE.format(
+                buyer_name=buyer['name'],
+                seller_name=seller['name'],
+                buyer_wallet="[Not set]",
+                seller_wallet="[Not set]"
+            )
+            
+            await self.client.send_message(
+                chat,
+                ready_msg,
+                parse_mode='html'
+            )
+            
+        except Exception as e:
+            print(f"[ERROR] Generating final PFP logo: {e}")
+            import traceback
+            traceback.print_exc()
+
+    async def start_bot(self):
+        """Start the bot"""
+        try:
+            print("═"*50)
+            print("🔐 SECURE ESCROW BOT")
+            print("═"*50)
+            
+            # Check config
+            if not API_ID or not API_HASH or not BOT_TOKEN:
+                print("❌ Missing configuration")
+                sys.exit(1)
+            
+            # Check assets
+            self.check_assets()
+            
+            # Start client
+            await self.client.start(bot_token=BOT_TOKEN)
+            
+            # Get bot info
+            me = await self.client.get_me()
+            
+            print(f"✅ Bot: @{me.username}")
+            print(f"🆔 ID: {me.id}")
+            print("═"*50)
+            
+            print("\n🚀 FEATURES:")
+            print("   • P2P & OTC Escrow Creation")
+            print("   • Profile picture preview on /begin")
+            print("   • PFP logo generation on role confirmation")
+            print("   • Role selection system")
+            print("   • Address management (/buyer, /seller, /addresses)")
+            print("   • Blacklist system")
+            print("   • Works with users without usernames")
+            print("   • Welcome message when new members join")
+            print("   • Auto-removal of blacklisted users")
+            print("\n📡 Bot is ready...")
+            print("   Ctrl+C to stop\n")
+            
+            # Run
+            await self.client.run_until_disconnected()
+            
+        except KeyboardInterrupt:
+            print("\n👋 Bot stopped")
+        except Exception as e:
+            print(f"\n❌ Error: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            print("\n🔴 Shutdown complete")
     
-    # Start cleanup task
-    asyncio.create_task(cleanup_expired_states())
-    
-    print("[HANDLERS] Address handlers setup complete")
-    print(f"[HANDLERS] • Buyer/Seller commands registered")
-    print(f"[HANDLERS] • Addresses menu registered")
-    print(f"[HANDLERS] • Address input handler registered")
-    print(f"[HANDLERS] • Cleanup task started")
-    
-    return client
+    def check_assets(self):
+        """Check if required assets exist"""
+        print("\n📁 Checking assets...")
+        
+        # Create necessary directories
+        os.makedirs('assets', exist_ok=True)
+        os.makedirs('config', exist_ok=True)
+        os.makedirs('data', exist_ok=True)
+        
+        # Check required assets
+        required_assets = [BASE_START_IMAGE, PFP_TEMPLATE, UNKNOWN_PFP]
+        
+        for asset in required_assets:
+            if not os.path.exists(asset):
+                print(f"❌ REQUIRED asset missing: {asset}")
+                if asset == UNKNOWN_PFP:
+                    print("   Creating unknown.png fallback...")
+                    # Create a simple unknown.png
+                    img = create_default_fallback()
+                    img.save(UNKNOWN_PFP)
+                    print(f"   Created {UNKNOWN_PFP}")
+                elif asset == BASE_START_IMAGE:
+                    print(f"   Please add {BASE_START_IMAGE} for /begin preview")
+                elif asset == PFP_TEMPLATE:
+                    print(f"   Please add {PFP_TEMPLATE} for final PFP logo")
+        
+        # Check font
+        font_path = "assets/Skynight.otf"
+        if not os.path.exists(font_path):
+            print(f"⚠️  Font file missing: {font_path}")
+            print("   PFP logos will use default font")
+        
+        print("✅ Asset check complete\n")
+
+async def main_async():
+    """Async main function"""
+    bot = EscrowBot()
+    await bot.start_bot()
+
+def main():
+    """Main function"""
+    # Run bot
+    asyncio.run(main_async())
+
+if __name__ == '__main__':
+    main()
