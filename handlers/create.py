@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Create escrow handlers - Fixed version with custom emoji support
+Create escrow handlers - Fixed version
 """
 from telethon.sessions import StringSession
 from telethon.tl import functions, types
 from telethon import Button
-from telethon.tl.types import ChatAdminRights, MessageEntityCustomEmoji
+from telethon.tl.types import ChatAdminRights, KeyboardButtonCopy
 from config import STRING_SESSION1, API_ID, API_HASH, set_bot_username, LOG_CHANNEL_ID
 from telethon import TelegramClient
 import asyncio
@@ -13,66 +13,10 @@ import json
 import os
 from datetime import datetime
 import time
-import re
 
 # Image URLs from config
 OTC_IMAGE = "https://files.catbox.moe/f6lzpr.png"
 P2P_IMAGE = "https://files.catbox.moe/ieiejo.png"
-
-# Add custom emoji parser functions
-def parse_custom_emoji_pattern(text):
-    """Parse text with custom emoji patterns like emoji_1= (ID: 6035339257529242355)"""
-    pattern = r'emoji_\d+= \(ID: (\d+)\)'
-    entities = []
-    
-    def replace_with_placeholder(match):
-        emoji_id = match.group(1)
-        entities.append(int(emoji_id))
-        return '�'
-    
-    processed_text = re.sub(pattern, replace_with_placeholder, text)
-    return processed_text, entities
-
-def create_message_with_custom_emojis(text, entities_list):
-    """Create a message with custom emoji entities"""
-    message_entities = []
-    
-    # Find all placeholder positions
-    placeholder_positions = []
-    for i, char in enumerate(text):
-        if char == '�':
-            placeholder_positions.append(i)
-    
-    if len(placeholder_positions) == len(entities_list):
-        for i, pos in enumerate(placeholder_positions):
-            emoji_id = entities_list[i]
-            message_entities.append(
-                MessageEntityCustomEmoji(
-                    offset=pos,
-                    length=1,
-                    document_id=emoji_id
-                )
-            )
-    
-    return text, message_entities
-
-# Modified edit function to handle custom emojis
-async def edit_message_with_custom_emojis(client, message, text, parse_mode='html', buttons=None):
-    """Edit a message that contains custom emoji placeholders"""
-    # Parse custom emoji patterns
-    processed_text, emoji_ids = parse_custom_emoji_pattern(text)
-    
-    # Create message with custom emoji entities
-    final_text, entities = create_message_with_custom_emojis(processed_text, emoji_ids)
-    
-    # Edit the message
-    return await client.edit_message(
-        message,
-        final_text,
-        parse_mode=parse_mode,
-        buttons=buttons,
-        formatting_entities=entities if entities else None
-    )
 
 # Define get_next_number locally
 def get_next_number(group_type="p2p"):
@@ -104,13 +48,6 @@ async def handle_create(event):
         from utils.texts import CREATE_MESSAGE
         from utils.buttons import get_create_buttons
         
-        # For callback queries, we need to get the message first
-        if hasattr(event, 'message') and event.message:
-            message = event.message
-        else:
-            # For callback queries without direct message attribute
-            message = await event.get_message()
-        
         await event.edit(
             CREATE_MESSAGE,
             buttons=get_create_buttons(),
@@ -125,12 +62,6 @@ async def handle_create_p2p(event):
     Handle P2P deal selection
     """
     try:
-        # Get the message object first (fix for callback queries)
-        if hasattr(event, 'message') and event.message:
-            message = event.message
-        else:
-            message = await event.get_message()
-        
         # Get user mention
         user = await event.get_sender()
         mention = user.first_name
@@ -172,19 +103,18 @@ async def handle_create_p2p(event):
             buttons = get_p2p_created_buttons(result["invite_url"])
             
             # Create message
-            message_text = P2P_CREATED_MESSAGE.format(
+            message = P2P_CREATED_MESSAGE.format(
                 GROUP_NUMBER=group_number,
                 GROUP_INVITE_LINK=result["invite_url"],
                 GROUP_NAME=group_name,
                 P2P_IMAGE=P2P_IMAGE
             )
             
-            # Send final message with custom emojis
-            await edit_message_with_custom_emojis(
-                event.client,
-                message,  # Use the message object we got at the beginning
-                message_text,
+            # Send final message
+            await event.edit(
+                message,
                 parse_mode='html',
+                link_preview=True,
                 buttons=buttons
             )
             
@@ -212,12 +142,6 @@ async def handle_create_other(event):
     Handle OTC deal selection
     """
     try:
-        # Get the message object first (fix for callback queries)
-        if hasattr(event, 'message') and event.message:
-            message = event.message
-        else:
-            message = await event.get_message()
-        
         # Get user mention
         user = await event.get_sender()
         mention = user.first_name
@@ -259,19 +183,18 @@ async def handle_create_other(event):
             buttons = get_otc_created_buttons(result["invite_url"])
             
             # Create message
-            message_text = OTHER_CREATED_MESSAGE.format(
+            message = OTHER_CREATED_MESSAGE.format(
                 GROUP_NUMBER=group_number,
                 GROUP_INVITE_LINK=result["invite_url"],
                 GROUP_NAME=group_name,
                 OTC_IMAGE=OTC_IMAGE
             )
             
-            # Send final message with custom emojis
-            await edit_message_with_custom_emojis(
-                event.client,
-                message,  # Use the message object we got at the beginning
-                message_text,
+            # Send final message
+            await event.edit(
+                message,
                 parse_mode='html',
+                link_preview=True,
                 buttons=buttons
             )
             
@@ -294,7 +217,6 @@ async def handle_create_other(event):
             buttons=[Button.inline("🔄 Try Again", b"create")]
         )
 
-# Rest of your code remains exactly the same...
 async def create_escrow_group(group_name, bot_username, group_type, bot_client, creator_user_id):
     """
     Create a supergroup
