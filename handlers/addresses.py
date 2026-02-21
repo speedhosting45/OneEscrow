@@ -1,7 +1,7 @@
-# address_handler.py
+# handlers/addresses.py
 """
-Address Handler Plugin for OneEscrow Bot
-Integrates with existing role system
+Address handlers for OneEscrow Bot
+This is a plugin that integrates with the main bot
 """
 
 import re
@@ -9,23 +9,50 @@ import json
 import os
 import logging
 import time
-import asyncio
-import aiohttp
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Optional, Tuple
 from datetime import datetime
 from telethon import events, Button
 
-# ==================== CONFIGURATION ====================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Configure colorful logging
+class ColoredFormatter(logging.Formatter):
+    """Custom formatter with colors"""
+    grey = "\x1b[38;21m"
+    blue = "\x1b[38;5;39m"
+    yellow = "\x1b[38;5;226m"
+    red = "\x1b[38;5;196m"
+    bold_red = "\x1b[31;1m"
+    green = "\x1b[38;5;40m"
+    cyan = "\x1b[38;5;51m"
+    magenta = "\x1b[38;5;201m"
+    reset = "\x1b[0m"
 
-# Use your existing data paths
+    def __init__(self, fmt):
+        super().__init__()
+        self.fmt = fmt
+        self.FORMATS = {
+            logging.DEBUG: self.grey + self.fmt + self.reset,
+            logging.INFO: self.green + self.fmt + self.reset,
+            logging.WARNING: self.yellow + self.fmt + self.reset,
+            logging.ERROR: self.red + self.fmt + self.reset,
+            logging.CRITICAL: self.bold_red + self.fmt + self.reset
+        }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(log_fmt, datefmt='%H:%M:%S')
+        return formatter.format(record)
+
+# Setup logger
+logger = logging.getLogger(__name__)
+
+# ==================== CONFIGURATION ====================
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Data files
 USER_ADDRESSES_FILE = os.path.join(BASE_DIR, 'data/user_addresses.json')
 USER_ROLES_FILE = os.path.join(BASE_DIR, 'data/user_roles.json')
 ACTIVE_GROUPS_FILE = os.path.join(BASE_DIR, 'data/active_groups.json')
 MESSAGES_LOG_FILE = os.path.join(BASE_DIR, 'data/messages_log.json')
-
-# ==================== LOGGING ====================
-logger = logging.getLogger(__name__)
 
 # ==================== DATA MANAGEMENT ====================
 def load_json(filepath: str, default=None):
@@ -62,31 +89,37 @@ class BlockchainValidator:
             'name': 'Bitcoin',
             'regex': r'^(bc1|[13])[a-zA-HJ-NP-Z0-9]{25,59}$',
             'explorer': 'https://blockchain.com/explorer/addresses/btc/{address}',
+            'color': '\x1b[38;5;226m'  # Yellow
         },
         'ETH': {
             'name': 'Ethereum',
             'regex': r'^0x[a-fA-F0-9]{40}$',
             'explorer': 'https://etherscan.io/address/{address}',
+            'color': '\x1b[38;5;105m'  # Light blue
         },
         'BSC': {
             'name': 'BNB Smart Chain',
             'regex': r'^0x[a-fA-F0-9]{40}$',
             'explorer': 'https://bscscan.com/address/{address}',
+            'color': '\x1b[38;5;220m'  # Gold
         },
         'TRX': {
             'name': 'Tron',
             'regex': r'^T[a-zA-Z0-9]{33}$',
             'explorer': 'https://tronscan.org/#/address/{address}',
+            'color': '\x1b[38;5;197m'  # Red
         },
         'LTC': {
             'name': 'Litecoin',
             'regex': r'^(ltc1|[LM])[a-zA-HJ-NP-Z0-9]{26,33}$',
             'explorer': 'https://blockchair.com/litecoin/address/{address}',
+            'color': '\x1b[38;5;39m'  # Blue
         },
         'MATIC': {
             'name': 'Polygon',
             'regex': r'^0x[a-fA-F0-9]{40}$',
             'explorer': 'https://polygonscan.com/address/{address}',
+            'color': '\x1b[38;5;129m'  # Purple
         }
     }
     
@@ -109,8 +142,6 @@ class BlockchainValidator:
         if not chain_code:
             return False, None, None
         
-        # For EVM chains, we could add additional verification here
-        # For now, just return the detected chain
         return True, chain_code, chain_name
 
 # ==================== ROLE MANAGER ====================
@@ -124,7 +155,6 @@ class RoleManager:
             roles = load_json(USER_ROLES_FILE, {})
             group_roles = roles.get(str(group_id), {})
             
-            # Check if user has a role
             for uid, role_data in group_roles.items():
                 if str(user_id) == uid:
                     return role_data.get('role')
@@ -139,8 +169,7 @@ class RoleManager:
         """Check if user can use command based on their existing role"""
         user_role = RoleManager.get_user_role(user_id, group_id)
         
-        # Debug logging
-        logger.info(f"Checking command: user={user_id}, wanted={command_role}, has={user_role}")
+        logger.info(f"[ 🔍 ] Checking command: user={user_id}, wanted={command_role}, has={user_role}")
         
         return user_role == command_role
 
@@ -178,12 +207,10 @@ Please use `/{"buyer" if user_role == "buyer" else "seller"}` instead."""
 
 You don't have a role in this escrow session.
 
-Please wait for admin to assign you a role (buyer or seller)."""
+Please wait for admin to assign you a role using /begin command."""
     
     @staticmethod
     def address_saved_success(user_name: str, role: str, address: str, chain: str):
-        explorer = BlockchainValidator.CHAINS.get(chain, {}).get('explorer', '').format(address=address)
-        
         return f"""✅ **{role.upper()} ADDRESS SAVED SUCCESSFULLY!**
 
 **User:** {user_name}
@@ -191,19 +218,10 @@ Please wait for admin to assign you a role (buyer or seller)."""
 **Chain:** {chain}
 **Address:** `{address}`
 
-🔗 [View on Explorer]({explorer})
-
 ⚠️ *This address is now locked for this escrow session.*"""
     
     @staticmethod
     def group_notification(user_name: str, role: str, address: str, chain: str):
-        explorer = BlockchainValidator.CHAINS.get(chain, {}).get('explorer', '').format(address=address)
-        
-        buttons = [
-            [Button.url(f"🔗 {role.upper()} Wallet", explorer)],
-            [Button.url("📊 Check Balance", f"https://debank.com/profile/{address}" if chain in ['ETH', 'BSC', 'MATIC'] else explorer)]
-        ]
-        
         message = f"""📢 **NEW {role.upper()} REGISTERED!**
 
 **User:** {user_name}
@@ -212,7 +230,7 @@ Please wait for admin to assign you a role (buyer or seller)."""
 
 ✅ Address verified and saved!"""
         
-        return message, buttons
+        return message
     
     @staticmethod
     def chain_mismatch(buyer_chain: str, seller_chain: str):
@@ -226,39 +244,13 @@ Seller Chain: **{seller_chain}**
 Please coordinate and use the same chain."""
     
     @staticmethod
-    def escrow_ready(group_name: str, buyer: Dict, seller: Dict, buyer_msg_id: int, seller_msg_id: int, group_id: str):
-        """Create escrow ready message with inline buttons"""
-        
-        # Create message links
-        if str(group_id).startswith('-100'):
-            # Supergroup format
-            buyer_link = f"https://t.me/c/{group_id[4:]}/{buyer_msg_id}"
-            seller_link = f"https://t.me/c/{group_id[4:]}/{seller_msg_id}"
-        else:
-            # Regular group format
-            buyer_link = f"https://t.me/c/{group_id}/{buyer_msg_id}"
-            seller_link = f"https://t.me/c/{group_id}/{seller_msg_id}"
-        
-        # Get explorers
-        buyer_explorer = BlockchainValidator.CHAINS.get(buyer['chain'], {}).get('explorer', '').format(address=buyer['address'])
-        seller_explorer = BlockchainValidator.CHAINS.get(seller['chain'], {}).get('explorer', '').format(address=seller['address'])
-        
-        # Create buttons
-        buttons = [
-            [
-                Button.url(f"👤 {buyer['user_name']}'s Wallet", buyer_explorer),
-                Button.url("📋 Buyer Post", buyer_link)
-            ],
-            [
-                Button.url(f"👤 {seller['user_name']}'s Wallet", seller_explorer),
-                Button.url("📋 Seller Post", seller_link)
-            ]
-        ]
+    def escrow_ready(group_name: str, buyer: Dict, seller: Dict, group_id: str):
+        """Create escrow ready message"""
         
         message = f"""🎉 **ESCROW SETUP COMPLETE!**
 
 **Group:** {group_name}
-**Chain:** {buyer['chain']}
+**Chain:** {buyer['chain_name']}
 **Status:** ✅ Ready for Transaction
 
 👥 **Participants:**
@@ -280,7 +272,7 @@ Please coordinate and use the same chain."""
 
 ⏰ **Auto-confirm in 24h if no disputes.**"""
         
-        return message, buttons
+        return message
 
 # ==================== ADDRESS HANDLER ====================
 class AddressHandler:
@@ -289,8 +281,9 @@ class AddressHandler:
     def __init__(self, client):
         self.client = client
         self.validator = BlockchainValidator()
-        self.setup_handlers()
-        logger.info("✅ Address Handler loaded")
+        logger.info("[ 📝 ] " + "="*50)
+        logger.info("[ 📝 ] Address Handler initialized")
+        logger.info("[ 📝 ] " + "="*50)
     
     def setup_handlers(self):
         """Setup command handlers"""
@@ -302,6 +295,12 @@ class AddressHandler:
         @self.client.on(events.NewMessage(pattern=r'^/seller(\s+|$)'))
         async def seller_handler(event):
             await self.handle_address_command(event, 'seller')
+        
+        @self.client.on(events.NewMessage(pattern=r'^/addresses$'))
+        async def addresses_handler(event):
+            await self.show_addresses(event)
+        
+        logger.info("[ 📝 ] Address command handlers registered")
     
     async def handle_address_command(self, event, role: str):
         """Handle /buyer or /seller command"""
@@ -310,9 +309,11 @@ class AddressHandler:
             chat = await event.get_chat()
             
             user_id = user.id
-            chat_id = event.chat_id
+            chat_id = str(event.chat_id)
             
-            logger.info(f"Received /{role} from user {user_id} in chat {chat_id}")
+            # Color based on role
+            role_color = '\x1b[38;5;51m' if role == 'buyer' else '\x1b[38;5;201m'
+            logger.info(f"[ {role_color}{role.upper()}\x1b[0m ] Command from user {user_id} in chat {chat_id}")
             
             # Check if in group
             if not hasattr(chat, 'title'):
@@ -320,20 +321,23 @@ class AddressHandler:
                 return
             
             # Check user's role
-            user_role = RoleManager.get_user_role(user_id, str(chat_id))
+            user_role = RoleManager.get_user_role(user_id, chat_id)
             
             if not user_role:
                 await event.reply(MessageTemplates.no_role())
+                logger.warning(f"[ ⚠️ ] User {user_id} has no role in chat {chat_id}")
                 return
             
             if user_role != role:
                 await event.reply(MessageTemplates.wrong_role(user_role, role))
+                logger.warning(f"[ ⚠️ ] Role mismatch: user={user_role}, command={role}")
                 return
             
             # Get address from command
             parts = event.text.split(maxsplit=1)
             if len(parts) < 2:
                 await event.reply(f"Usage: /{role} [your_wallet_address]")
+                logger.info(f"[ ℹ️ ] Missing address in /{role} command")
                 return
             
             address = parts[1].strip()
@@ -346,13 +350,16 @@ class AddressHandler:
             
             if not is_valid:
                 await processing_msg.edit(MessageTemplates.invalid_format())
+                logger.warning(f"[ ⚠️ ] Invalid address format from user {user_id}")
                 return
             
-            logger.info(f"Address validated: {chain_code} - {chain_name}")
+            # Get chain color
+            chain_color = BlockchainValidator.CHAINS.get(chain_code, {}).get('color', '\x1b[38;5;255m')
+            logger.info(f"[ {chain_color}{chain_code}\x1b[0m ] Valid address from user {user_id}")
             
             # Check if user already has address saved
             addresses = load_json(USER_ADDRESSES_FILE, {})
-            chat_addresses = addresses.get(str(chat_id), {})
+            chat_addresses = addresses.get(chat_id, {})
             
             if role in chat_addresses and chat_addresses[role].get('user_id') == user_id:
                 # User already has address saved
@@ -360,15 +367,16 @@ class AddressHandler:
                     f"⚠️ **Address Already Set!**\n\n"
                     f"You already have a {role} address saved:\n"
                     f"`{chat_addresses[role]['address'][:16]}...{chat_addresses[role]['address'][-8:]}`\n"
-                    f"**Chain:** {chat_addresses[role]['chain']}\n\n"
+                    f"**Chain:** {chat_addresses[role]['chain_name']}\n\n"
                     f"*Contact admin to change address.*"
                 )
+                logger.info(f"[ ℹ️ ] User {user_id} already has {role} address")
                 return
             
             # Prepare address data
             address_data = {
                 'user_id': user_id,
-                'user_name': user.first_name,
+                'user_name': user.first_name or f"User_{user_id}",
                 'address': address,
                 'chain': chain_code,
                 'chain_name': chain_name,
@@ -377,79 +385,91 @@ class AddressHandler:
             }
             
             # Save address
-            if str(chat_id) not in addresses:
-                addresses[str(chat_id)] = {}
+            if chat_id not in addresses:
+                addresses[chat_id] = {}
             
-            addresses[str(chat_id)][role] = address_data
+            addresses[chat_id][role] = address_data
             save_json(USER_ADDRESSES_FILE, addresses)
             
             # Send success message to user
             await processing_msg.edit(
                 MessageTemplates.address_saved_success(
-                    user.first_name, role, address, chain_name
+                    user.first_name or f"User_{user_id}", 
+                    role, 
+                    address, 
+                    chain_name
                 ),
                 link_preview=False
             )
             
             # Send notification to group
-            group_msg_id = await self.send_group_notification(chat, role, address_data)
+            await self.send_group_notification(chat, role, address_data)
             
-            # Save message info for linking
-            self.save_message_info(str(chat_id), role, group_msg_id, user_id, address)
+            logger.info(f"[ ✅ ] {role.upper()} address saved for user {user_id} on {chain_code}")
             
             # Check if escrow is ready (both addresses set)
             await self.check_escrow_ready(chat)
             
         except Exception as e:
-            logger.error(f"Error in handle_address_command: {e}", exc_info=True)
+            logger.error(f"[ ❌ ] Error in handle_address_command: {e}", exc_info=True)
             try:
                 await event.reply("❌ An error occurred. Please try again.")
             except:
                 pass
     
-    async def send_group_notification(self, chat, role: str, address_data: Dict) -> Optional[int]:
-        """Send notification to group and return message ID"""
+    async def send_group_notification(self, chat, role: str, address_data: Dict):
+        """Send notification to group"""
         try:
-            message, buttons = MessageTemplates.group_notification(
+            message = MessageTemplates.group_notification(
                 address_data['user_name'],
                 role,
                 address_data['address'],
                 address_data['chain_name']
             )
             
-            sent_msg = await self.client.send_message(
+            await self.client.send_message(
                 chat.id,
                 message,
-                buttons=buttons,
                 parse_mode='markdown'
             )
             
-            logger.info(f"Group notification sent for {role}")
-            return sent_msg.id
+            logger.info(f"[ 📢 ] Group notification sent for {role}")
             
         except Exception as e:
-            logger.error(f"Error sending group notification: {e}")
-            return None
+            logger.error(f"[ ❌ ] Error sending group notification: {e}")
     
-    def save_message_info(self, chat_id: str, role: str, message_id: int, user_id: int, address: str):
-        """Save message info for later linking"""
+    async def show_addresses(self, event):
+        """Show all addresses in the current chat"""
         try:
-            messages = load_json(MESSAGES_LOG_FILE, {})
+            chat = await event.get_chat()
+            chat_id = str(event.chat_id)
             
-            if chat_id not in messages:
-                messages[chat_id] = {}
+            addresses = load_json(USER_ADDRESSES_FILE, {})
+            chat_addresses = addresses.get(chat_id, {})
             
-            messages[chat_id][role] = {
-                'message_id': message_id,
-                'user_id': user_id,
-                'address': address,
-                'timestamp': time.time()
-            }
+            if not chat_addresses:
+                await event.reply("📭 No addresses saved in this group yet.")
+                return
             
-            save_json(MESSAGES_LOG_FILE, messages)
+            message = f"**📋 Addresses in {chat.title}**\n\n"
+            
+            if 'buyer' in chat_addresses:
+                buyer = chat_addresses['buyer']
+                message += f"**Buyer:** {buyer['user_name']}\n"
+                message += f"`{buyer['address'][:20]}...`\n"
+                message += f"Chain: {buyer['chain_name']}\n\n"
+            
+            if 'seller' in chat_addresses:
+                seller = chat_addresses['seller']
+                message += f"**Seller:** {seller['user_name']}\n"
+                message += f"`{seller['address'][:20]}...`\n"
+                message += f"Chain: {seller['chain_name']}\n"
+            
+            await event.reply(message, parse_mode='markdown')
             
         except Exception as e:
-            logger.error(f"Error saving message info: {e}")
+            logger.error(f"[ ❌ ] Error showing addresses: {e}")
+            await event.reply("❌ Error loading addresses.")
     
     async def check_escrow_ready(self, chat):
         """Check if both buyer and seller addresses are set"""
@@ -464,7 +484,7 @@ class AddressHandler:
             buyer = chat_addresses['buyer']
             seller = chat_addresses['seller']
             
-            logger.info(f"Checking escrow for chat {chat.id}: buyer={buyer['chain']}, seller={seller['chain']}")
+            logger.info(f"[ 🔍 ] Checking escrow for chat {chat.id}: buyer={buyer['chain']}, seller={seller['chain']}")
             
             # Check chain match
             if buyer['chain'] != seller['chain']:
@@ -473,122 +493,79 @@ class AddressHandler:
                     MessageTemplates.chain_mismatch(buyer['chain_name'], seller['chain_name']),
                     parse_mode='markdown'
                 )
+                logger.warning(f"[ ⚠️ ] Chain mismatch in chat {chat.id}: {buyer['chain']} vs {seller['chain']}")
                 return
             
-            # Get message IDs
-            messages = load_json(MESSAGES_LOG_FILE, {})
-            chat_messages = messages.get(str(chat.id), {})
-            
-            buyer_msg_id = chat_messages.get('buyer', {}).get('message_id')
-            seller_msg_id = chat_messages.get('seller', {}).get('message_id')
-            
             # Send escrow ready message
-            await self.send_escrow_ready(
-                chat, buyer, seller, buyer_msg_id, seller_msg_id
-            )
+            await self.send_escrow_ready(chat, buyer, seller)
             
         except Exception as e:
-            logger.error(f"Error checking escrow ready: {e}")
+            logger.error(f"[ ❌ ] Error checking escrow ready: {e}")
     
-    async def send_escrow_ready(self, chat, buyer: Dict, seller: Dict, buyer_msg_id: int, seller_msg_id: int):
-        """Send escrow ready message with inline buttons"""
+    async def send_escrow_ready(self, chat, buyer: Dict, seller: Dict):
+        """Send escrow ready message"""
         try:
-            message, buttons = MessageTemplates.escrow_ready(
+            message = MessageTemplates.escrow_ready(
                 chat.title,
                 buyer,
                 seller,
-                buyer_msg_id,
-                seller_msg_id,
                 str(chat.id)
             )
             
             await self.client.send_message(
                 chat.id,
                 message,
-                buttons=buttons,
                 parse_mode='markdown'
             )
             
-            logger.info(f"Escrow ready message sent for {chat.title}")
+            logger.info(f"[ 🎉 ] Escrow ready in {chat.title}")
+            logger.info(f"[ 👤 ] Buyer: {buyer['user_name']} ({buyer['chain']})")
+            logger.info(f"[ 👤 ] Seller: {seller['user_name']} ({seller['chain']})")
             
         except Exception as e:
-            logger.error(f"Error sending escrow ready: {e}")
+            logger.error(f"[ ❌ ] Error sending escrow ready: {e}")
 
-# ==================== PLUGIN LOADER ====================
-def load_plugin(client):
+# ==================== MAIN EXPORT FUNCTION ====================
+def setup_address_handlers(client):
     """
-    Load the address handler plugin into your existing bot
-    
-    Usage in main.py:
-        from address_handler import load_plugin
-        load_plugin(client)
+    Main function to setup address handlers
+    This is what main.py imports and calls
     """
     try:
+        # Create handler instance
         handler = AddressHandler(client)
-        logger.info("🚀 Address Handler Plugin loaded successfully!")
+        
+        # Setup the handlers
+        handler.setup_handlers()
+        
+        logger.info("[ ✅ ] " + "="*50)
+        logger.info("[ ✅ ] Address handlers setup complete!")
+        logger.info("[ ✅ ] Commands: /buyer, /seller, /addresses")
+        logger.info("[ ✅ ] " + "="*50)
+        
         return handler
+        
     except Exception as e:
-        logger.error(f"Failed to load address handler plugin: {e}")
+        logger.error(f"[ ❌ ] Failed to setup address handlers: {e}")
         raise
 
-# ==================== INTEGRATION GUIDE ====================
-"""
-HOW TO INTEGRATE WITH YOUR EXISTING BOT:
-
-1. Save this file as 'address_handler.py' in your bot directory
-
-2. In your main.py, add:
-
-# At the top with other imports
-from address_handler import load_plugin
-
-# After creating your client, load the plugin
-client = TelegramClient(...)
-load_plugin(client)
-
-3. That's it! The plugin will automatically:
-   - Read roles from your existing user_roles.json
-   - Save addresses to user_addresses.json
-   - Send group notifications
-   - Check chain matching
-   - Send final escrow ready message
-
-The plugin uses your existing data structure:
-• user_roles.json - for checking user permissions
-• user_addresses.json - for storing wallet addresses
-• messages_log.json - for storing message IDs for linking
-
-Commands available:
-• /buyer [address] - Only for users with 'buyer' role
-• /seller [address] - Only for users with 'seller' role
-
-Features:
-✅ Role-based command access (reads from your existing roles)
-✅ Address validation for multiple blockchains
-✅ Group notifications with wallet explorer links
-✅ Chain matching enforcement
-✅ Message linking in final success message
-✅ Inline buttons for easy navigation
-✅ Integration with your existing data files
-"""
-
-# Simple test
+# For testing
 if __name__ == "__main__":
     print("""
-    🔌 Address Handler Plugin for OneEscrow Bot
+    📝 Address Handlers Module for OneEscrow Bot
     ==============================================
     
-    This plugin adds /buyer and /seller commands that:
-    1. Check user's role from existing user_roles.json
-    2. Validate wallet addresses
-    3. Send group notifications
-    4. Check chain matching
-    5. Send final escrow ready message with inline buttons
+    This module exports:
+    • setup_address_handlers(client) - Main function to setup handlers
     
-    To use:
-    1. Save as address_handler.py
-    2. In main.py: from address_handler import load_plugin
-    3. After client creation: load_plugin(client)
+    Commands added:
+    • /buyer [address] - For buyers to set their wallet
+    • /seller [address] - For sellers to set their wallet
+    • /addresses - Show all addresses in current chat
     
-    No changes needed to your existing role system!
+    Features:
+    • Colorful logging
+    • Blockchain address validation
+    • Role-based access control
+    • Chain matching enforcement
     """)
