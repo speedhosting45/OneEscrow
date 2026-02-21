@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Main entry point for the Escrow Bot - Fixed version
+Main entry point for the Escrow Bot - Fixed version with join notifications
 """
 import asyncio
 import logging
@@ -30,7 +30,7 @@ from utils.texts import (
     START_MESSAGE, CREATE_MESSAGE, P2P_CREATED_MESSAGE, OTHER_CREATED_MESSAGE,
     WELCOME_MESSAGE, SESSION_INITIATED_MESSAGE, INSUFFICIENT_MEMBERS_MESSAGE,
     SESSION_ALREADY_INITIATED_MESSAGE, GROUP_NOT_FOUND_MESSAGE,
-    MERGED_PHOTO_CAPTION, PARTICIPANTS_CONFIRMED_MESSAGE
+    MERGED_PHOTO_CAPTION, PARTICIPANTS_CONFIRMED_MESSAGE, JOIN_MESSAGE
 )
 from utils.buttons import get_main_menu_buttons, get_session_buttons
 from utils.blacklist import is_blacklisted, add_to_blacklist, load_blacklist
@@ -388,6 +388,11 @@ class EscrowBot:
         # Setup address handlers
         setup_address_handlers(self.client)
         
+        # Handle new users joining
+        @self.client.on(events.ChatAction)
+        async def handle_chat_action(event):
+            await self.handle_new_member(event)
+        
         # Delete system messages only
         @self.client.on(events.NewMessage)
         async def handle_all_messages(event):
@@ -413,6 +418,59 @@ class EscrowBot:
                     
             except:
                 pass
+    
+    async def handle_new_member(self, event):
+        """Handle new members joining the group"""
+        try:
+            # Check if this is a user joining event
+            if event.user_joined or event.user_added:
+                # Get the chat
+                chat = await event.get_chat()
+                
+                # Get the new member(s)
+                users = event.action_message.action.users
+                
+                for user_id in users:
+                    try:
+                        # Get user info
+                        user = await event.client.get_entity(user_id)
+                        
+                        # Check if it's a bot
+                        if hasattr(user, 'bot') and user.bot:
+                            continue
+                        
+                        # Get user display name
+                        user_display = get_user_display(user)
+                        
+                        # Check blacklist
+                        is_blocked, reason = is_blacklisted(user)
+                        if is_blocked:
+                            # If blacklisted, remove them
+                            try:
+                                await event.client.kick_participant(chat, user_id)
+                                print(f"[BLACKLIST] Removed blacklisted user {user_display} from {chat.title}")
+                            except:
+                                pass
+                            continue
+                        
+                        # Send welcome message
+                        welcome_text = JOIN_MESSAGE.format(
+                            user_mention=f"<a href='tg://user?id={user_id}'>{user_display}</a>"
+                        )
+                        
+                        await event.client.send_message(
+                            chat,
+                            welcome_text,
+                            parse_mode='html'
+                        )
+                        
+                        print(f"[JOIN] New member joined: {user_display} in {chat.title}")
+                        
+                    except Exception as e:
+                        print(f"[ERROR] Processing new member: {e}")
+                        
+        except Exception as e:
+            print(f"[ERROR] Handle new member: {e}")
     
     async def get_group_owner_id(self, chat):
         """Get the Telegram user ID of the group owner/creator"""
@@ -517,59 +575,58 @@ class EscrowBot:
                 return
             
             # Get participants - EXCLUDE BOT, GROUP OWNER, AND BLACKLISTED USERS
-            # Get participants - EXCLUDE BOT, GROUP OWNER, AND BLACKLISTED USERS
-try:
-    participants = await self.client.get_participants(chat)
-    eligible_users = []
-    
-    bot_id = (await self.client.get_me()).id
-    
-    # Get group owner ID
-    group_owner_id = await self.get_group_owner_id(chat)
-    
-    print(f"[BEGIN] Total participants: {len(participants)}")
-    print(f"[BEGIN] Bot ID: {bot_id}")
-    print(f"[BEGIN] Group Owner ID: {group_owner_id}")
-    
-    for participant in participants:
-        participant_id = participant.id
-        
-        # Skip bot
-        if participant_id == bot_id:
-            print(f"[BEGIN] Skipping bot: {participant_id}")
-            continue
-        
-        # Skip group owner
-        if group_owner_id and participant_id == group_owner_id:
-            print(f"[BEGIN] Skipping group owner: {participant_id}")
-            continue
-        
-        # Check if it's a bot account
-        if hasattr(participant, 'bot') and participant.bot:
-            print(f"[BEGIN] Skipping bot account: {participant_id}")
-            continue
-        
-        # Check if blacklisted
-        is_blocked, reason = is_blacklisted(participant)
-        if is_blocked:
-            print(f"[BEGIN] Skipping blacklisted user: {participant_id} - {reason}")
-            continue
-        
-        # Add user as eligible (not bot, not owner, not blacklisted)
-        eligible_users.append(participant)
-        print(f"[BEGIN] Added eligible user: ID={participant_id}, Name={get_user_display(participant)}")
-    
-    member_count = len(eligible_users)
-    print(f"[BEGIN] Found {member_count} eligible users (excluding bot, owner, blacklisted)")
-    
-    # Need exactly 2 eligible users (for buyer and seller)
-    if member_count != 2:
-        try:
-            message = INSUFFICIENT_MEMBERS_MESSAGE.format(current_count=member_count)
-            await event.reply(message, parse_mode='html')
-        except:
-            pass
-        return
+            try:
+                participants = await self.client.get_participants(chat)
+                eligible_users = []
+                
+                bot_id = (await self.client.get_me()).id
+                
+                # Get group owner ID
+                group_owner_id = await self.get_group_owner_id(chat)
+                
+                print(f"[BEGIN] Total participants: {len(participants)}")
+                print(f"[BEGIN] Bot ID: {bot_id}")
+                print(f"[BEGIN] Group Owner ID: {group_owner_id}")
+                
+                for participant in participants:
+                    participant_id = participant.id
+                    
+                    # Skip bot
+                    if participant_id == bot_id:
+                        print(f"[BEGIN] Skipping bot: {participant_id}")
+                        continue
+                    
+                    # Skip group owner
+                    if group_owner_id and participant_id == group_owner_id:
+                        print(f"[BEGIN] Skipping group owner: {participant_id}")
+                        continue
+                    
+                    # Check if it's a bot account
+                    if hasattr(participant, 'bot') and participant.bot:
+                        print(f"[BEGIN] Skipping bot account: {participant_id}")
+                        continue
+                    
+                    # Check if blacklisted
+                    is_blocked, reason = is_blacklisted(participant)
+                    if is_blocked:
+                        print(f"[BEGIN] Skipping blacklisted user: {participant_id} - {reason}")
+                        continue
+                    
+                    # Add user as eligible (not bot, not owner, not blacklisted)
+                    eligible_users.append(participant)
+                    print(f"[BEGIN] Added eligible user: ID={participant_id}, Name={get_user_display(participant)}")
+                
+                member_count = len(eligible_users)
+                print(f"[BEGIN] Found {member_count} eligible users (excluding bot, owner, blacklisted)")
+                
+                # Need exactly 2 eligible users (for buyer and seller)
+                if member_count != 2:
+                    try:
+                        message = INSUFFICIENT_MEMBERS_MESSAGE.format(current_count=member_count)
+                        await event.reply(message, parse_mode='html')
+                    except:
+                        pass
+                    return
                 
                 # Update members
                 group_data["members"] = [u.id for u in eligible_users]
@@ -892,9 +949,11 @@ try:
             print("   • PFP logo generation on role confirmation")
             print("   • Role selection system")
             print("   • Address management (/buyer, /seller, /addresses)")
-            print("   • Blacklist system (excludes @alyaassis etc)")
+            print("   • Blacklist system")
             print("   • Works with users without usernames")
             print("   • User ID display for long/no usernames")
+            print("   • Welcome message when new members join")
+            print("   • Auto-removal of blacklisted users")
             print("\n📡 Bot is ready...")
             print("   Ctrl+C to stop\n")
             
