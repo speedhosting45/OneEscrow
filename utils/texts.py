@@ -12,6 +12,13 @@ Initiate or manage secure escrow agreements through the menu below.
 # Add this line to your texts.py file
 JOIN_MESSAGE = "👋 Welcome {user_mention}! You've joined an escrow group. Wait for the session to begin."
 
+ADDRESSES_MENU_TEXT = (
+    "<b>📋 Escrow Addresses</b>\n\n"
+    "<b>Buyer Address:</b>\n{buyer_display}\n\n"
+    "<b>Seller Address:</b>\n{seller_display}\n\n"
+    "<i>Use the buttons below to manage addresses.</i>"
+)
+
 CREATE_MESSAGE = """
 𝘊𝘳𝘦𝘢𝘵𝘦 𝘕𝘦𝘸 𝘌𝘴𝘤𝘳𝘰𝘸
 
