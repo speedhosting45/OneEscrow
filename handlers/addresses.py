@@ -53,6 +53,7 @@ USER_ADDRESSES_FILE = os.path.join(BASE_DIR, 'data/user_addresses.json')
 USER_ROLES_FILE = os.path.join(BASE_DIR, 'data/user_roles.json')
 ACTIVE_GROUPS_FILE = os.path.join(BASE_DIR, 'data/active_groups.json')
 WALLETS_FILE = os.path.join(BASE_DIR, 'data/wallets.json')
+PENDING_CHANGES_FILE = os.path.join(BASE_DIR, 'data/pending_changes.json')
 
 # ==================== DATA MANAGEMENT ====================
 def load_json(filepath: str, default=None):
@@ -97,6 +98,9 @@ def normalize_group_id(chat_id) -> str:
 class BlockchainValidator:
     """Blockchain address validator with explorer URLs"""
     
+    # BSC (BEP20) specific patterns - addresses starting with specific prefixes commonly used in BSC
+    BSC_PREFIXES = ['0x', 'bnb', 'bsc']
+    
     CHAINS = {
         'BTC': {
             'name': 'Bitcoin',
@@ -111,8 +115,8 @@ class BlockchainValidator:
             'color': '\x1b[38;5;105m'  # Light blue
         },
         'BSC': {
-            'name': 'BNB Smart Chain',
-            'regex': r'^0x[a-fA-F0-9]{40}$',
+            'name': 'BNB Smart Chain (BEP20)',
+            'regex': r'^0x[a-fA-F0-9]{40}$',  # Same regex as ETH
             'explorer': 'https://bscscan.com/address/{address}',
             'color': '\x1b[38;5;220m'  # Gold
         },
@@ -149,22 +153,50 @@ class BlockchainValidator:
     }
     
     @staticmethod
-    def detect_chain(address: str) -> Tuple[Optional[str], Optional[str]]:
-        """Detect blockchain from address"""
+    def detect_chain(address: str, user_hint: str = None) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Detect blockchain from address
+        If address matches multiple chains (like ETH and BSC), use user hint if available
+        """
         address = address.strip()
+        possible_chains = []
         
         for chain_code, config in BlockchainValidator.CHAINS.items():
             if re.match(config['regex'], address):
-                return chain_code, config['name']
+                possible_chains.append((chain_code, config['name']))
         
-        return None, None
+        if not possible_chains:
+            return None, None
+        
+        # If only one possible chain, return it
+        if len(possible_chains) == 1:
+            return possible_chains[0]
+        
+        # If multiple possible chains (ETH, BSC, MATIC all use 0x format)
+        # Use user hint if provided
+        if user_hint:
+            hint_lower = user_hint.lower()
+            for chain_code, chain_name in possible_chains:
+                if hint_lower in chain_code.lower() or hint_lower in chain_name.lower():
+                    return chain_code, chain_name
+        
+        # Default to Ethereum if multiple matches and no hint
+        # But check if it might be BSC (you can add more sophisticated detection here)
+        for chain_code, chain_name in possible_chains:
+            if chain_code == 'BSC' and address.startswith('0x'):
+                # You could add BSC-specific checks here
+                # For now, we'll return BSC as default for 0x addresses
+                return 'BSC', 'BNB Smart Chain (BEP20)'
+        
+        # Default to Ethereum
+        return 'ETH', 'Ethereum'
     
     @staticmethod
-    async def verify_address(address: str) -> Tuple[bool, Optional[str], Optional[str], Optional[str]]:
+    async def verify_address(address: str, user_hint: str = None) -> Tuple[bool, Optional[str], Optional[str], Optional[str]]:
         """
         Verify address and return (is_valid, chain_code, chain_name, explorer_url)
         """
-        chain_code, chain_name = BlockchainValidator.detect_chain(address)
+        chain_code, chain_name = BlockchainValidator.detect_chain(address, user_hint)
         
         if not chain_code:
             return False, None, None, None
@@ -238,11 +270,13 @@ class MessageTemplates:
 Please use a valid address format:
 • <b>Bitcoin (BTC):</b> <code>1A1zP1...</code> or <code>bc1q...</code>
 • <b>Ethereum (ETH):</b> <code>0x...</code>
-• <b>BNB Chain (BSC):</b> <code>0x...</code>
+• <b>BNB Chain (BSC/BEP20):</b> <code>0x...</code>
 • <b>Tron (TRX):</b> <code>T...</code>
 • <b>Litecoin (LTC):</b> <code>L...</code> or <code>ltc1q...</code>
 • <b>Polygon (MATIC):</b> <code>0x...</code>
-• <b>Solana (SOL):</b> <code>base58 string</code>"""
+• <b>Solana (SOL):</b> <code>base58 string</code>
+
+💡 <b>Tip:</b> For BSC addresses, you can specify: <code>/seller bsc 0x...</code>"""
     
     @staticmethod
     def no_role():
@@ -364,11 +398,77 @@ Contact admin to change address."""
     
     @staticmethod
     def missing_address(role: str):
-        return f"<b>Usage:</b> <code>/{role} [your_wallet_address]</code>"
+        return f"<b>Usage:</b> <code>/{role} [your_wallet_address]</code>\n\n<b>For BSC:</b> <code>/{role} bsc 0x...</code>"
     
     @staticmethod
     def missing_address_verify():
         return "<b>Usage:</b> <code>/verify [wallet_address]</code>"
+    
+    @staticmethod
+    def change_wallet_prompt(role: str, user_mention: str):
+        """Prompt user to send new wallet address"""
+        return f"""{user_mention} <b>please send your new {role.upper()} wallet address.</b>
+
+<b>Format:</b> <code>/{role} [address]</code>
+<b>Example:</b> <code>/{role} 0x1234567890abcdef...</code>
+
+💡 <b>For BSC addresses:</b> <code>/{role} bsc 0x...</code>
+
+You have 5 minutes to respond."""
+    
+    @staticmethod
+    def change_timeout(role: str):
+        return f"<b>⏰ Timeout!</b> {role.upper()} wallet change request expired. Please try again."
+
+# ==================== PENDING CHANGE MANAGER ====================
+class PendingChangeManager:
+    """Manage pending wallet change requests"""
+    
+    @staticmethod
+    def create_request(user_id: int, group_id: str, role: str, message_id: int):
+        """Create a pending change request"""
+        pending = load_json(PENDING_CHANGES_FILE, {})
+        
+        key = f"{group_id}:{user_id}:{role}"
+        pending[key] = {
+            'user_id': user_id,
+            'group_id': group_id,
+            'role': role,
+            'message_id': message_id,
+            'timestamp': time.time(),
+            'expires': time.time() + 300  # 5 minutes
+        }
+        
+        save_json(PENDING_CHANGES_FILE, pending)
+        return key
+    
+    @staticmethod
+    def get_request(user_id: int, group_id: str, role: str):
+        """Get pending change request"""
+        pending = load_json(PENDING_CHANGES_FILE, {})
+        key = f"{group_id}:{user_id}:{role}"
+        
+        request = pending.get(key)
+        if request and request.get('expires', 0) > time.time():
+            return request
+        
+        if key in pending:
+            del pending[key]
+            save_json(PENDING_CHANGES_FILE, pending)
+        
+        return None
+    
+    @staticmethod
+    def remove_request(user_id: int, group_id: str, role: str):
+        """Remove pending change request"""
+        pending = load_json(PENDING_CHANGES_FILE, {})
+        key = f"{group_id}:{user_id}:{role}"
+        
+        if key in pending:
+            del pending[key]
+            save_json(PENDING_CHANGES_FILE, pending)
+            return True
+        return False
 
 # ==================== ADDRESS HANDLER ====================
 class AddressHandler:
@@ -377,6 +477,7 @@ class AddressHandler:
     def __init__(self, client):
         self.client = client
         self.validator = BlockchainValidator()
+        self.pending_manager = PendingChangeManager()
         logger.info("[ 📝 ] " + "="*50)
         logger.info("[ 📝 ] Address Handler initialized")
         logger.info("[ 📝 ] " + "="*50)
@@ -403,11 +504,11 @@ class AddressHandler:
         # Callback handlers for change buttons
         @self.client.on(events.CallbackQuery(pattern=r'change_buyer_(.+)'))
         async def change_buyer_callback(event):
-            await self.handle_change_wallet(event, 'buyer')
+            await self.handle_change_wallet_callback(event, 'buyer')
         
         @self.client.on(events.CallbackQuery(pattern=r'change_seller_(.+)'))
         async def change_seller_callback(event):
-            await self.handle_change_wallet(event, 'seller')
+            await self.handle_change_wallet_callback(event, 'seller')
         
         logger.info("[ 📝 ] Address command handlers registered")
     
@@ -422,18 +523,24 @@ class AddressHandler:
                 return
             
             # Get address from command
-            parts = event.text.split(maxsplit=1)
+            parts = event.text.split()
             if len(parts) < 2:
                 await event.reply(MessageTemplates.missing_address_verify(), parse_mode='html')
                 return
             
-            address = parts[1].strip()
+            # Check if user specified a chain hint
+            user_hint = None
+            address = parts[1]
+            
+            if len(parts) >= 3 and parts[1].lower() in ['bsc', 'eth', 'matic', 'polygon']:
+                user_hint = parts[1].lower()
+                address = parts[2]
             
             # Show processing
             processing_msg = await event.reply(MessageTemplates.processing(), parse_mode='html')
             
-            # Validate address
-            is_valid, chain_code, chain_name, explorer_url = await self.validator.verify_address(address)
+            # Validate address with hint
+            is_valid, chain_code, chain_name, explorer_url = await self.validator.verify_address(address, user_hint)
             
             if not is_valid:
                 await processing_msg.edit(MessageTemplates.invalid_format(), parse_mode='html')
@@ -488,35 +595,35 @@ class AddressHandler:
                 return
             
             # Get address from command
-            parts = event.text.split(maxsplit=1)
+            parts = event.text.split()
             if len(parts) < 2:
                 await event.reply(MessageTemplates.missing_address(role), parse_mode='html')
                 return
             
-            address = parts[1].strip()
+            # Check if user specified a chain hint
+            user_hint = None
+            address = parts[1]
+            
+            if len(parts) >= 3 and parts[1].lower() in ['bsc', 'eth', 'matic', 'polygon']:
+                user_hint = parts[1].lower()
+                address = parts[2]
             
             # Show processing
             processing_msg = await event.reply(MessageTemplates.processing(), parse_mode='html')
             
-            # Validate address
-            is_valid, chain_code, chain_name, explorer_url = await self.validator.verify_address(address)
+            # Validate address with hint
+            is_valid, chain_code, chain_name, explorer_url = await self.validator.verify_address(address, user_hint)
             
             if not is_valid:
                 await processing_msg.edit(MessageTemplates.invalid_format(), parse_mode='html')
                 return
             
-            # Check if user already has address saved
-            addresses = load_json(USER_ADDRESSES_FILE, {})
-            chat_addresses = addresses.get(group_id, {})
+            # Check if this is a pending change request
+            pending = self.pending_manager.get_request(user_id, group_id, role)
+            is_change = pending is not None
             
-            if role in chat_addresses and chat_addresses[role].get('user_id') == user_id:
-                # User already has address saved
-                existing = chat_addresses[role]
-                await processing_msg.edit(
-                    MessageTemplates.already_set(role, existing['chain_name'], existing['address']),
-                    parse_mode='html'
-                )
-                return
+            # Load addresses
+            addresses = load_json(USER_ADDRESSES_FILE, {})
             
             # Prepare address data
             address_data = {
@@ -550,6 +657,15 @@ class AddressHandler:
             
             save_json(WALLETS_FILE, wallets)
             
+            # Remove pending change if this was a change
+            if is_change:
+                self.pending_manager.remove_request(user_id, group_id, role)
+                # Delete the prompt message
+                try:
+                    await self.client.delete_messages(chat.id, pending['message_id'])
+                except:
+                    pass
+            
             # Send success message with appropriate template
             if role == 'buyer':
                 success_msg = MessageTemplates.buyer_success(
@@ -571,8 +687,9 @@ class AddressHandler:
             
             await processing_msg.edit(success_msg, buttons=buttons, parse_mode='html')
             
-            # Send notification to group
-            await self.send_group_notification(chat, role, address_data)
+            # Send notification to group (only if not a change)
+            if not is_change:
+                await self.send_group_notification(chat, role, address_data)
             
             logger.info(f"[ ✅ ] {role.upper()} address saved for user {user_id} on {chain_code}")
             
@@ -586,16 +703,12 @@ class AddressHandler:
             except:
                 pass
     
-    async def handle_change_wallet(self, event, role: str):
-        """Handle change wallet callback"""
+    async def handle_change_wallet_callback(self, event, role: str):
+        """Handle change wallet callback - prompts user to send new address"""
         try:
             user = await event.get_sender()
             chat = await event.get_chat()
             group_id = normalize_group_id(chat.id)
-            
-            # Extract address from callback data
-            data = event.data.decode('utf-8')
-            address = data.replace(f'change_{role}_', '')
             
             # Check permissions
             user_role = RoleManager.get_user_role(user.id, group_id)
@@ -605,77 +718,32 @@ class AddressHandler:
                 await event.answer("❌ You don't have permission to change this wallet", alert=True)
                 return
             
-            # Show processing
-            await event.answer("Processing...", alert=False)
+            # Create user mention
+            user_mention = f"<a href='tg://user?id={user.id}'>{user.first_name}</a>"
             
-            # Validate address
-            is_valid, chain_code, chain_name, explorer_url = await self.validator.verify_address(address)
+            # Send prompt message
+            prompt_msg = await event.reply(
+                MessageTemplates.change_wallet_prompt(role, user_mention),
+                parse_mode='html'
+            )
             
-            if not is_valid:
-                await event.answer("❌ Invalid address format!", alert=True)
-                return
+            # Create pending change request
+            self.pending_manager.create_request(user.id, group_id, role, prompt_msg.id)
             
-            # Update address
-            addresses = load_json(USER_ADDRESSES_FILE, {})
-            if group_id not in addresses:
-                addresses[group_id] = {}
+            # Answer callback
+            await event.answer(f"📝 Please send your new {role} address", alert=False)
             
-            address_data = {
-                'user_id': user.id,
-                'user_name': user.first_name or f"User_{user.id}",
-                'address': address,
-                'chain': chain_code,
-                'chain_name': chain_name,
-                'timestamp': time.time(),
-                'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'updated': True
-            }
+            # Delete the original message with buttons
+            try:
+                await event.delete()
+            except:
+                pass
             
-            addresses[group_id][role] = address_data
-            save_json(USER_ADDRESSES_FILE, addresses)
-            
-            # Update wallets.json
-            wallets = load_json(WALLETS_FILE, {})
-            if group_id not in wallets:
-                wallets[group_id] = {}
-            
-            if role == 'buyer':
-                wallets[group_id]['buyer_wallet'] = address
-                wallets[group_id]['buyer_id'] = user.id
-            else:
-                wallets[group_id]['seller_wallet'] = address
-                wallets[group_id]['seller_id'] = user.id
-            
-            save_json(WALLETS_FILE, wallets)
-            
-            # Send confirmation
-            if role == 'buyer':
-                msg = MessageTemplates.buyer_success(
-                    user.first_name or f"User_{user.id}",
-                    address,
-                    chain_name,
-                    chain_code
-                )
-            else:
-                msg = MessageTemplates.seller_success(
-                    user.first_name or f"User_{user.id}",
-                    address,
-                    chain_name,
-                    chain_code
-                )
-            
-            buttons = [[Button.url("🔎 View Wallet", explorer_url)]]
-            
-            await event.edit(msg, buttons=buttons, parse_mode='html')
-            
-            logger.info(f"[ 🔄 ] {role.upper()} wallet changed for user {user.id}")
-            
-            # Check chain match
-            await self.check_chain_match(chat)
+            logger.info(f"[ 🔄 ] {role.upper()} change requested by user {user.id}")
             
         except Exception as e:
-            logger.error(f"[ ❌ ] Error in change wallet: {e}", exc_info=True)
-            await event.answer("❌ Error updating wallet", alert=True)
+            logger.error(f"[ ❌ ] Error in change wallet callback: {e}", exc_info=True)
+            await event.answer("❌ Error processing request", alert=True)
     
     async def send_group_notification(self, chat, role: str, address_data: Dict):
         """Send notification to group"""
@@ -820,8 +888,9 @@ if __name__ == "__main__":
     Features:
     • HTML parse_mode for all messages
     • Blockchain address validation with explorer links
+    • BSC (BEP20) support with chain hints
     • Role-based access control
     • Chain matching enforcement
-    • Change wallet functionality for owners/creators
+    • Change wallet functionality with @mention prompt
     • Consistent group ID handling (str(chat.id))
     """)
