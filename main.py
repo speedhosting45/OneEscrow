@@ -438,11 +438,6 @@ class EscrowBot:
         async def role_handler(event):
             await self.handle_role_selection(event)
         
-        # Handle /buyer command
-        @self.client.on(events.NewMessage(pattern='/buyer'))
-        async def buyer_handler(event):
-            await self.handle_buyer_command(event)
-        
         # Setup address handlers
         setup_address_handlers(self.client)
         
@@ -476,76 +471,6 @@ class EscrowBot:
                     
             except:
                 pass
-    
-    async def handle_buyer_command(self, event):
-        """Handle /buyer command to set buyer wallet"""
-        try:
-            # Get user and chat
-            user = await event.get_sender()
-            chat = await event.get_chat()
-            chat_id = str(chat.id)
-            clean_chat_id = clean_group_id(chat_id)
-            
-            # Load user roles
-            roles = load_user_roles()
-            
-            # Check if user has buyer role in this group
-            user_role = None
-            
-            # Check with string user ID (roles are stored with string keys)
-            if clean_chat_id in roles:
-                if str(user.id) in roles[clean_chat_id]:
-                    user_role = roles[clean_chat_id][str(user.id)].get("role")
-            
-            if not user_role or user_role != "buyer":
-                await event.reply("❌ You are not assigned as the buyer in this group.", parse_mode='html')
-                return
-            
-            # Get wallet address from message
-            message_parts = event.message.text.split()
-            if len(message_parts) < 2:
-                await event.reply(
-                    "❌ Please provide your wallet address.\n\n"
-                    "Usage: /buyer <wallet_address>\n"
-                    "Example: /buyer 0x1234567890abcdef...",
-                    parse_mode='html'
-                )
-                return
-            
-            wallet_address = message_parts[1].strip()
-            
-            # Load wallets
-            wallets = load_wallets()
-            
-            # Initialize group in wallets if not exists
-            if clean_chat_id not in wallets:
-                wallets[clean_chat_id] = {}
-            
-            # Save buyer wallet
-            wallets[clean_chat_id]["buyer_wallet"] = wallet_address
-            wallets[clean_chat_id]["buyer_id"] = user.id
-            
-            save_wallets(wallets)
-            
-            # Also update group data
-            groups = load_groups()
-            if clean_chat_id in groups:
-                groups[clean_chat_id]["buyer_wallet_address"] = wallet_address
-                save_groups(groups)
-            
-            await event.reply(
-                f"✅ Buyer wallet address saved!\n\n"
-                f"Address: <code>{wallet_address}</code>",
-                parse_mode='html'
-            )
-            
-            print(f"[BUYER] Wallet set for {get_user_display(user)} in {chat.title}")
-            
-        except Exception as e:
-            print(f"[ERROR] /buyer command: {e}")
-            import traceback
-            traceback.print_exc()
-            await event.reply("❌ An error occurred while setting wallet address.", parse_mode='html')
     
     async def handle_new_member(self, event):
         """Handle new members joining the group"""
