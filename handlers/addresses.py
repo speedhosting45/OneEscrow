@@ -48,11 +48,11 @@ logger = logging.getLogger(__name__)
 # ==================== CONFIGURATION ====================
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# Data files
+# Data files - Using consistent naming with main.py
 USER_ADDRESSES_FILE = os.path.join(BASE_DIR, 'data/user_addresses.json')
 USER_ROLES_FILE = os.path.join(BASE_DIR, 'data/user_roles.json')
 ACTIVE_GROUPS_FILE = os.path.join(BASE_DIR, 'data/active_groups.json')
-MESSAGES_LOG_FILE = os.path.join(BASE_DIR, 'data/messages_log.json')
+WALLETS_FILE = os.path.join(BASE_DIR, 'data/wallets.json')  # Added to sync with main.py
 
 # ==================== DATA MANAGEMENT ====================
 def load_json(filepath: str, default=None):
@@ -79,6 +79,21 @@ def save_json(filepath: str, data: Dict) -> bool:
     except Exception as e:
         logger.error(f"Failed to save {filepath}: {e}")
         return False
+
+def normalize_group_id(chat_id) -> str:
+    """
+    Normalize group ID to a consistent format
+    Always use str(chat.id) format, no cleaning, no -100 removal
+    """
+    try:
+        # If it's already a string, return as-is
+        if isinstance(chat_id, str):
+            return chat_id
+        # Convert to string
+        return str(chat_id)
+    except Exception as e:
+        logger.error(f"Error normalizing group ID: {e}")
+        return str(chat_id)
 
 # ==================== BLOCKCHAIN VALIDATOR ====================
 class BlockchainValidator:
@@ -152,14 +167,28 @@ class RoleManager:
     def get_user_role(user_id: int, group_id: str) -> Optional[str]:
         """Get user's role from existing user_roles.json"""
         try:
+            # Load roles data
             roles = load_json(USER_ROLES_FILE, {})
-            group_roles = roles.get(str(group_id), {})
             
+            # Normalize group_id to match main.py's format
+            # Main.py stores roles with full chat.id as string
+            normalized_group_id = normalize_group_id(group_id)
+            
+            logger.info(f"[ 🔍 ] Checking role for user {user_id} in group {normalized_group_id}")
+            
+            # Get group roles
+            group_roles = roles.get(normalized_group_id, {})
+            
+            # Check each role entry (keys are string user IDs)
             for uid, role_data in group_roles.items():
                 if str(user_id) == uid:
-                    return role_data.get('role')
+                    role = role_data.get('role')
+                    logger.info(f"[ ✅ ] Found role: {role} for user {user_id}")
+                    return role
             
+            logger.warning(f"[ ⚠️ ] No role found for user {user_id} in group {normalized_group_id}")
             return None
+            
         except Exception as e:
             logger.error(f"Error getting user role: {e}")
             return None
@@ -309,23 +338,25 @@ class AddressHandler:
             chat = await event.get_chat()
             
             user_id = user.id
-            chat_id = str(event.chat_id)
+            # CRITICAL FIX: Use chat.id, NOT event.chat_id
+            # This ensures consistency with how main.py stores roles
+            group_id = str(chat.id)  # Normalized to string chat.id
             
             # Color based on role
             role_color = '\x1b[38;5;51m' if role == 'buyer' else '\x1b[38;5;201m'
-            logger.info(f"[ {role_color}{role.upper()}\x1b[0m ] Command from user {user_id} in chat {chat_id}")
+            logger.info(f"[ {role_color}{role.upper()}\x1b[0m ] Command from user {user_id} in group {group_id}")
             
             # Check if in group
             if not hasattr(chat, 'title'):
                 await event.reply("❌ This command only works in groups!")
                 return
             
-            # Check user's role
-            user_role = RoleManager.get_user_role(user_id, chat_id)
+            # Check user's role using normalized group_id
+            user_role = RoleManager.get_user_role(user_id, group_id)
             
             if not user_role:
                 await event.reply(MessageTemplates.no_role())
-                logger.warning(f"[ ⚠️ ] User {user_id} has no role in chat {chat_id}")
+                logger.warning(f"[ ⚠️ ] User {user_id} has no role in group {group_id}")
                 return
             
             if user_role != role:
@@ -359,7 +390,9 @@ class AddressHandler:
             
             # Check if user already has address saved
             addresses = load_json(USER_ADDRESSES_FILE, {})
-            chat_addresses = addresses.get(chat_id, {})
+            
+            # Use normalized group_id
+            chat_addresses = addresses.get(group_id, {})
             
             if role in chat_addresses and chat_addresses[role].get('user_id') == user_id:
                 # User already has address saved
@@ -384,12 +417,30 @@ class AddressHandler:
                 'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }
             
-            # Save address
-            if chat_id not in addresses:
-                addresses[chat_id] = {}
+            # Save address to user_addresses.json
+            if group_id not in addresses:
+                addresses[group_id] = {}
             
-            addresses[chat_id][role] = address_data
+            addresses[group_id][role] = address_data
             save_json(USER_ADDRESSES_FILE, addresses)
+            
+            # ALSO save to wallets.json to maintain compatibility with main.py
+            try:
+                wallets = load_json(WALLETS_FILE, {})
+                if group_id not in wallets:
+                    wallets[group_id] = {}
+                
+                if role == 'buyer':
+                    wallets[group_id]['buyer_wallet'] = address
+                    wallets[group_id]['buyer_id'] = user_id
+                else:
+                    wallets[group_id]['seller_wallet'] = address
+                    wallets[group_id]['seller_id'] = user_id
+                
+                save_json(WALLETS_FILE, wallets)
+                logger.info(f"[ ✅ ] Also saved to wallets.json for compatibility")
+            except Exception as e:
+                logger.error(f"Error saving to wallets.json: {e}")
             
             # Send success message to user
             await processing_msg.edit(
@@ -442,10 +493,10 @@ class AddressHandler:
         """Show all addresses in the current chat"""
         try:
             chat = await event.get_chat()
-            chat_id = str(event.chat_id)
+            group_id = str(chat.id)  # Normalized
             
             addresses = load_json(USER_ADDRESSES_FILE, {})
-            chat_addresses = addresses.get(chat_id, {})
+            chat_addresses = addresses.get(group_id, {})
             
             if not chat_addresses:
                 await event.reply("📭 No addresses saved in this group yet.")
@@ -474,8 +525,9 @@ class AddressHandler:
     async def check_escrow_ready(self, chat):
         """Check if both buyer and seller addresses are set"""
         try:
+            group_id = str(chat.id)  # Normalized
             addresses = load_json(USER_ADDRESSES_FILE, {})
-            chat_addresses = addresses.get(str(chat.id), {})
+            chat_addresses = addresses.get(group_id, {})
             
             # Check if both addresses exist
             if 'buyer' not in chat_addresses or 'seller' not in chat_addresses:
@@ -568,4 +620,5 @@ if __name__ == "__main__":
     • Blockchain address validation
     • Role-based access control
     • Chain matching enforcement
+    • Consistent group ID handling (str(chat.id))
     """)
