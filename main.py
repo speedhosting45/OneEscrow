@@ -51,6 +51,7 @@ logging.basicConfig(
 # Track groups for invite management
 GROUPS_FILE = 'data/active_groups.json'
 USER_ROLES_FILE = 'data/user_roles.json'
+WALLETS_FILE = 'data/wallets.json'
 
 # Asset paths
 BASE_START_IMAGE = "assets/base_start.png"  # For /begin preview
@@ -97,6 +98,26 @@ def save_user_roles(roles):
             json.dump(roles, f, indent=2)
     except Exception as e:
         print(f"[ERROR] Saving roles: {e}")
+
+def load_wallets():
+    """Load wallet addresses data"""
+    try:
+        if os.path.exists(WALLETS_FILE):
+            with open(WALLETS_FILE, 'r') as f:
+                return json.load(f)
+        return {}
+    except Exception as e:
+        print(f"[ERROR] Loading wallets: {e}")
+        return {}
+
+def save_wallets(wallets):
+    """Save wallet addresses data"""
+    try:
+        os.makedirs('data', exist_ok=True)
+        with open(WALLETS_FILE, 'w') as f:
+            json.dump(wallets, f, indent=2)
+    except Exception as e:
+        print(f"[ERROR] Saving wallets: {e}")
 
 def get_user_display(user_obj):
     """Get clean display name for user"""
@@ -417,6 +438,11 @@ class EscrowBot:
         async def role_handler(event):
             await self.handle_role_selection(event)
         
+        # Handle /buyer command
+        @self.client.on(events.NewMessage(pattern='/buyer'))
+        async def buyer_handler(event):
+            await self.handle_buyer_command(event)
+        
         # Setup address handlers
         setup_address_handlers(self.client)
         
@@ -450,6 +476,76 @@ class EscrowBot:
                     
             except:
                 pass
+    
+    async def handle_buyer_command(self, event):
+        """Handle /buyer command to set buyer wallet"""
+        try:
+            # Get user and chat
+            user = await event.get_sender()
+            chat = await event.get_chat()
+            chat_id = str(chat.id)
+            clean_chat_id = clean_group_id(chat_id)
+            
+            # Load user roles
+            roles = load_user_roles()
+            
+            # Check if user has buyer role in this group
+            user_role = None
+            
+            # Check with string user ID (roles are stored with string keys)
+            if clean_chat_id in roles:
+                if str(user.id) in roles[clean_chat_id]:
+                    user_role = roles[clean_chat_id][str(user.id)].get("role")
+            
+            if not user_role or user_role != "buyer":
+                await event.reply("❌ You are not assigned as the buyer in this group.", parse_mode='html')
+                return
+            
+            # Get wallet address from message
+            message_parts = event.message.text.split()
+            if len(message_parts) < 2:
+                await event.reply(
+                    "❌ Please provide your wallet address.\n\n"
+                    "Usage: /buyer <wallet_address>\n"
+                    "Example: /buyer 0x1234567890abcdef...",
+                    parse_mode='html'
+                )
+                return
+            
+            wallet_address = message_parts[1].strip()
+            
+            # Load wallets
+            wallets = load_wallets()
+            
+            # Initialize group in wallets if not exists
+            if clean_chat_id not in wallets:
+                wallets[clean_chat_id] = {}
+            
+            # Save buyer wallet
+            wallets[clean_chat_id]["buyer_wallet"] = wallet_address
+            wallets[clean_chat_id]["buyer_id"] = user.id
+            
+            save_wallets(wallets)
+            
+            # Also update group data
+            groups = load_groups()
+            if clean_chat_id in groups:
+                groups[clean_chat_id]["buyer_wallet_address"] = wallet_address
+                save_groups(groups)
+            
+            await event.reply(
+                f"✅ Buyer wallet address saved!\n\n"
+                f"Address: <code>{wallet_address}</code>",
+                parse_mode='html'
+            )
+            
+            print(f"[BUYER] Wallet set for {get_user_display(user)} in {chat.title}")
+            
+        except Exception as e:
+            print(f"[ERROR] /buyer command: {e}")
+            import traceback
+            traceback.print_exc()
+            await event.reply("❌ An error occurred while setting wallet address.", parse_mode='html')
     
     async def handle_new_member(self, event):
         """Handle new members joining the group"""
@@ -828,7 +924,7 @@ class EscrowBot:
             if group_id not in roles:
                 roles[group_id] = {}
             
-            # Check if already chosen
+            # Check if already chosen (using string user ID)
             if str(sender.id) in roles[group_id]:
                 await event.answer(ROLE_ALREADY_CHOSEN_MESSAGE, alert=True)
                 return
@@ -839,7 +935,7 @@ class EscrowBot:
                 await event.answer(ROLE_ALREADY_TAKEN_MESSAGE, alert=True)
                 return
             
-            # Save role
+            # Save role (using string user ID)
             roles[group_id][str(sender.id)] = {
                 "role": role,
                 "name": get_user_display(sender),
@@ -900,7 +996,7 @@ class EscrowBot:
             await event.answer("❌ Error selecting role", alert=True)
     
     async def finalize_session(self, chat, group_id, user_roles, group_data):
-        """Finalize session after both roles selected"""
+        """Finalize session after both roles selected - FIXED VERSION"""
         try:
             # Find buyer and seller
             buyer = None
@@ -921,13 +1017,40 @@ class EscrowBot:
             
             print(f"[FINAL] Finalizing {group_type_display} escrow")
             
+            # Load wallet addresses from wallets file
+            wallets = load_wallets()
+            
+            # Get wallet addresses if they exist (using string keys for group_id)
+            buyer_wallet_address = "[Not set]"
+            seller_wallet_address = "[Not set]"
+            
+            if group_id in wallets:
+                if "buyer_wallet" in wallets[group_id]:
+                    buyer_wallet_address = wallets[group_id]["buyer_wallet"]
+                if "seller_wallet" in wallets[group_id]:
+                    seller_wallet_address = wallets[group_id]["seller_wallet"]
+            
+            # Also update group data with wallet addresses
+            if group_id in wallets:
+                group_data["buyer_wallet_address"] = buyer_wallet_address
+                group_data["seller_wallet_address"] = seller_wallet_address
+                
+                # Save updated group data
+                groups = load_groups()
+                if group_id in groups:
+                    groups[group_id]["buyer_wallet_address"] = buyer_wallet_address
+                    groups[group_id]["seller_wallet_address"] = seller_wallet_address
+                    save_groups(groups)
+            
             # Generate final PFP logo
             await self.generate_final_pfp_logo(chat, group_id, user_roles)
             
-            # Send wallet setup message
+            # Send wallet setup message - FIXED: Now includes all required placeholders
             wallet_msg = WALLET_SETUP_MESSAGE.format(
                 buyer_name=buyer['name'],
-                seller_name=seller['name']
+                seller_name=seller['name'],
+                buyer_wallet_address=buyer_wallet_address,
+                seller_wallet_address=seller_wallet_address
             )
             
             await self.client.send_message(
