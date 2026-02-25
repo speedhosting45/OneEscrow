@@ -44,60 +44,60 @@ def get_next_number(group_type="p2p"):
         print(f"[ERROR] get_next_number: {e}")
         return 1
 
+from telethon.tl.types import MessageEntityCustomEmoji
+
 async def handle_create(event):
+    """
+    Handle create escrow button click with premium custom emojis
+    Safe dynamic UTF-16 offset calculation
+    """
     try:
         from utils.buttons import get_create_buttons
 
-        text = """
-𝘊𝘳𝘦𝘢𝘵𝘦 𝘕𝘦𝘸 𝘌𝘴𝘤𝘳𝘰𝘸 🔩
+        # IMPORTANT: No leading newline here
+        text = (
+            "𝘊𝘳𝘦𝘢𝘵𝘦 𝘕𝘦𝘸 𝘌𝘴𝘤𝘳𝘰𝘸 🔩\n\n"
+            "<blockquote>Select transaction type to proceed</blockquote>\n\n"
+            "• <b>P2P Deal 🥂</b> – Standard buyer/seller transactions\n"
+            "• <b>Other Deal ❤️</b> – Custom or multi-party agreements\n\n"
+            "All escrows operate within private, bot-moderated groups🔥."
+        )
 
-<blockquote>Select transaction type to proceed</blockquote>
+        # Map emoji → custom emoji id
+        emoji_map = {
+            "🔩": 5260249805522744465,
+            "🥂": 5260567255145539253,
+            "❤️": 5285439518130857782,
+            "🔥": 5228796381329645973,
+        }
 
-• <b>P2P Deal 🥂</b> – Standard buyer/seller transactions
-• <b>Other Deal ❤️</b> – Custom or multi-party agreements
+        entities = []
 
-All escrows operate within private, bot-moderated groups🔥.
-"""
+        # Convert to UTF-16 to calculate correct offsets
+        utf16_text = text.encode("utf-16-le")
 
-        entities = [
-            MessageEntityCustomEmoji(
-                offset=54,
-                length=2,
-                document_id=5260249805522744465
-            ),
-            MessageEntityCustomEmoji(
-                offset=133,
-                length=2,
-                document_id=5260567255145539253
-            ),
-            MessageEntityCustomEmoji(
-                offset=193,
-                length=2,
-                document_id=5285439518130857782
-            ),
-            MessageEntityCustomEmoji(
-                offset=292,
-                length=2,
-                document_id=5228796381329645973
+        for emoji, doc_id in emoji_map.items():
+            index = text.index(emoji)
+
+            # Convert Python index → UTF-16 offset
+            utf16_offset = len(text[:index].encode("utf-16-le")) // 2
+            utf16_length = len(emoji.encode("utf-16-le")) // 2
+
+            entities.append(
+                MessageEntityCustomEmoji(
+                    offset=utf16_offset,
+                    length=utf16_length,
+                    document_id=doc_id
+                )
             )
-        ]
 
         await event.edit(
             text,
             buttons=get_create_buttons(),
             parse_mode="html",
-            formatting_entities=entities  # <-- for your Telethon version
+            formatting_entities=entities  # your Telethon version needs this
         )
 
-    except Exception as e:
-        print(f"[ERROR] create handler: {e}")
-        
-        # Delete the original message if it's a callback
-        try:
-            await event.delete()
-        except:
-            pass
-            
     except Exception as e:
         print(f"[ERROR] create handler: {e}")
         import traceback
