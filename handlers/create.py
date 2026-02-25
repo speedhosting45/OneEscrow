@@ -172,14 +172,13 @@ async def handle_create_p2p(event):
         
         if result and "invite_url" in result:
             from utils.buttons import get_p2p_created_buttons
-            from telethon.helpers import add_surrogate
             from telethon.tl.types import MessageEntityCustomEmoji
             
             # Get buttons
             buttons = get_p2p_created_buttons(result["invite_url"])
             
-            # NORMAL string for sending (NO add_surrogate)
-            normal_text = f"""
+            # Normal text (no HTML tags since we're using entities)
+            text = f"""
 𝘗2𝘗 𝘌𝘴𝘤𝘳𝘰𝘸 𝘌𝘴𝘵𝘢𝘣𝘭𝘪𝘴𝘩𝘦𝘥 💵
 
 Secure transaction group created 🚀
@@ -193,9 +192,6 @@ Status: Ready for configuration
 Proceed to the group to configure participants and terms ⚖️
 """
             
-            # SURROGATE version for offset calculation ONLY
-            surrogate_text = add_surrogate(normal_text)
-            
             # Custom emoji IDs
             emoji_map = {
                 "💵": 5409048419211682843,
@@ -206,31 +202,38 @@ Proceed to the group to configure participants and terms ⚖️
             
             entities = []
             
-            # Calculate offsets using surrogate_text
+            # Calculate UTF-16 offsets correctly WITHOUT surrogate
             for emoji, doc_id in emoji_map.items():
                 try:
-                    # Find emoji position in surrogate text
-                    index = surrogate_text.index(emoji)
-                    # Length in UTF-16 code units
-                    length = len(add_surrogate(emoji))
+                    # Find position in normal text
+                    index = text.index(emoji)
+                    
+                    # Calculate UTF-16 offset (number of UTF-16 code units before this position)
+                    utf16_offset = len(text[:index].encode("utf-16-le")) // 2
+                    
+                    # Calculate UTF-16 length of the emoji
+                    utf16_length = len(emoji.encode("utf-16-le")) // 2
                     
                     entities.append(
                         MessageEntityCustomEmoji(
-                            offset=index,
-                            length=length,
+                            offset=utf16_offset,
+                            length=utf16_length,
                             document_id=doc_id
                         )
                     )
+                    
+                    print(f"[DEBUG] Emoji {emoji} at offset {utf16_offset}, length {utf16_length}")
+                    
                 except ValueError:
                     print(f"[WARNING] Emoji {emoji} not found in text")
                     continue
             
-            # Sort entities by offset
+            # Sort entities by offset to ensure proper order
             entities.sort(key=lambda e: e.offset)
             
-            # Send with NORMAL text (no surrogates)
+            # Send with normal text (NO surrogates, NO HTML)
             await event.edit(
-                normal_text,  # ✅ Normal string, NO surrogates
+                text,
                 buttons=buttons,
                 formatting_entities=entities,
                 link_preview=True
@@ -241,6 +244,44 @@ Proceed to the group to configure participants and terms ⚖️
         else:
             await event.edit(
                 "𝘌𝘴𝘤𝘳𝘰𝘸 𝘊𝘳𝘦𝘢𝘵𝘪𝘰𝘯 𝘍𝘢𝘪𝘭𝘦𝘥\n\nPlease try again later",
+                buttons=[Button.inline("🔄 Try Again", b"create")]
+            )
+            
+    except Exception as e:
+        print(f"[ERROR] P2P handler: {e}")
+        import traceback
+        traceback.print_exc()
+        # Fallback to regular message without custom emojis
+        try:
+            from utils.texts import P2P_CREATED_MESSAGE
+            from utils.buttons import get_p2p_created_buttons
+            
+            # Create group again if needed
+            if 'result' not in locals() or not result:
+                result = await create_escrow_group(group_name, bot_username, "p2p", event.client, user.id)
+            
+            if result and "invite_url" in result:
+                message = P2P_CREATED_MESSAGE.format(
+                    GROUP_NUMBER=group_number,
+                    GROUP_INVITE_LINK=result["invite_url"],
+                    GROUP_NAME=group_name,
+                    P2P_IMAGE=P2P_IMAGE
+                )
+                await event.edit(
+                    message,
+                    parse_mode='html',
+                    link_preview=True,
+                    buttons=get_p2p_created_buttons(result["invite_url"])
+                )
+            else:
+                await event.edit(
+                    "𝘌𝘴𝘤𝘳𝘰𝘸 𝘊𝘳𝘦𝘢𝘵𝘪𝘰𝘯 𝘍𝘢𝘪𝘭𝘦𝘥\n\nPlease try again later",
+                    buttons=[Button.inline("🔄 Try Again", b"create")]
+                )
+        except Exception as fallback_error:
+            print(f"[ERROR] P2P fallback: {fallback_error}")
+            await event.edit(
+                "𝘌𝘳𝘳𝘰𝘳 𝘊𝘳𝘦𝘢𝘵𝘪𝘯𝘨 𝘌𝘴𝘤𝘳𝘰𝘸\n\nTechnical issue detected",
                 buttons=[Button.inline("🔄 Try Again", b"create")]
             )
             
