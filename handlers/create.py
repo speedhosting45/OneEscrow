@@ -137,7 +137,7 @@ async def handle_create(event):
 
 async def handle_create_p2p(event):
     """
-    Handle P2P deal selection with premium custom emojis
+    Handle P2P deal selection with premium custom emojis - UTF-16 safe
     """
     try:
         # Get user mention
@@ -157,17 +157,14 @@ async def handle_create_p2p(event):
         
         # Show animation messages
         animation_messages = [
-            f"𝘊𝘳𝘦𝘢𝘵𝘪𝘯𝘨 𝘗2𝘗 𝘌𝘴𝘤𝘳𝘰𝘸\n\n<blockquote>Please wait {mention}.</blockquote>",
-            f"𝘊𝘳𝘦𝘢𝘵𝘪𝘯𝘨 𝘗2𝘗 𝘌𝘴𝘤𝘳𝘰𝘸\n\n<blockquote>Please wait {mention}..</blockquote>",
-            f"𝘊𝘳𝘦𝘢𝘵𝘪𝘯𝘨 𝘗2𝘗 𝘌𝘴𝘤𝘳𝘰𝘸\n\n<blockquote>Please wait {mention}...</blockquote>",
+            f"𝘊𝘳𝘦𝘢𝘵𝘪𝘯𝘨 𝘗2𝘗 𝘌𝘴𝘤𝘳𝘰𝘸\n\nPlease wait {mention}.",
+            f"𝘊𝘳𝘦𝘢𝘵𝘪𝘯𝘨 𝘗2𝘗 𝘌𝘴𝘤𝘳𝘰𝘸\n\nPlease wait {mention}..",
+            f"𝘊𝘳𝘦𝘢𝘵𝘪𝘯𝘨 𝘗2𝘗 𝘌𝘴𝘤𝘳𝘰𝘸\n\nPlease wait {mention}...",
         ]
         
         # Display animation
         for msg in animation_messages:
-            await event.edit(
-                msg,
-                parse_mode='html'
-            )
+            await event.edit(msg)
             await asyncio.sleep(0.5)
         
         # Create group
@@ -175,12 +172,14 @@ async def handle_create_p2p(event):
         
         if result and "invite_url" in result:
             from utils.buttons import get_p2p_created_buttons
+            from telethon.helpers import add_surrogate
+            from telethon.tl.types import MessageEntityCustomEmoji
             
             # Get buttons
             buttons = get_p2p_created_buttons(result["invite_url"])
             
-            # The message text with placeholders (exact same as in texts.py)
-            raw_text = f"""
+            # NORMAL string for sending (NO add_surrogate)
+            normal_text = f"""
 𝘗2𝘗 𝘌𝘴𝘤𝘳𝘰𝘸 𝘌𝘴𝘵𝘢𝘣𝘭𝘪𝘴𝘩𝘦𝘥 💵
 
 Secure transaction group created 🚀
@@ -193,45 +192,55 @@ Status: Ready for configuration
 
 Proceed to the group to configure participants and terms ⚖️
 """
-
-safe_text = raw_text  # this is what we send
-surrogate_text = add_surrogate(raw_text)  # ONLY for offset calculation
-
-emoji_map = {
-    "💵": 5409048419211682843,
-    "🚀": 5258332798409783582,
-    "🎈": 5278651867780377852,
-    "⚖️": 5400250414929041085,
-}
-
-entities = []
-
-for emoji, doc_id in emoji_map.items():
-    index = surrogate_text.index(emoji)
-    utf16_offset = index
-    utf16_length = len(add_surrogate(emoji))
-
-    entities.append(
-        MessageEntityCustomEmoji(
-            offset=utf16_offset,
-            length=utf16_length,
-            document_id=doc_id
-        )
-    )
-
-await event.edit(
-    raw_text,   # ✅ send normal string
-    formatting_entities=entities,
-    buttons=buttons,
-    link_preview=True
-)
+            
+            # SURROGATE version for offset calculation ONLY
+            surrogate_text = add_surrogate(normal_text)
+            
+            # Custom emoji IDs
+            emoji_map = {
+                "💵": 5409048419211682843,
+                "🚀": 5258332798409783582,
+                "🎈": 5278651867780377852,
+                "⚖️": 5400250414929041085,
+            }
+            
+            entities = []
+            
+            # Calculate offsets using surrogate_text
+            for emoji, doc_id in emoji_map.items():
+                try:
+                    # Find emoji position in surrogate text
+                    index = surrogate_text.index(emoji)
+                    # Length in UTF-16 code units
+                    length = len(add_surrogate(emoji))
+                    
+                    entities.append(
+                        MessageEntityCustomEmoji(
+                            offset=index,
+                            length=length,
+                            document_id=doc_id
+                        )
+                    )
+                except ValueError:
+                    print(f"[WARNING] Emoji {emoji} not found in text")
+                    continue
+            
+            # Sort entities by offset
+            entities.sort(key=lambda e: e.offset)
+            
+            # Send with NORMAL text (no surrogates)
+            await event.edit(
+                normal_text,  # ✅ Normal string, NO surrogates
+                buttons=buttons,
+                formatting_entities=entities,
+                link_preview=True
+            )
             
             print(f"[SUCCESS] P2P Escrow created: {group_name}")
             
         else:
             await event.edit(
-                "𝘌𝘴𝘤𝘳𝘰𝘸 𝘊𝘳𝘦𝘢𝘵𝘪𝘰𝘯 𝘍𝘢𝘪𝘭𝘦𝘥\n\n<blockquote>Please try again later</blockquote>",
-                parse_mode='html',
+                "𝘌𝘴𝘤𝘳𝘰𝘸 𝘊𝘳𝘦𝘢𝘵𝘪𝘰𝘯 𝘍𝘢𝘪𝘭𝘦𝘥\n\nPlease try again later",
                 buttons=[Button.inline("🔄 Try Again", b"create")]
             )
             
@@ -263,18 +272,15 @@ await event.edit(
                 )
             else:
                 await event.edit(
-                    "𝘌𝘴𝘤𝘳𝘰𝘸 𝘊𝘳𝘦𝘢𝘵𝘪𝘰𝘯 𝘍𝘢𝘪𝘭𝘦𝘥\n\n<blockquote>Please try again later</blockquote>",
-                    parse_mode='html',
+                    "𝘌𝘴𝘤𝘳𝘰𝘸 𝘊𝘳𝘦𝘢𝘵𝘪𝘰𝘯 𝘍𝘢𝘪𝘭𝘦𝘥\n\nPlease try again later",
                     buttons=[Button.inline("🔄 Try Again", b"create")]
                 )
         except Exception as fallback_error:
             print(f"[ERROR] P2P fallback: {fallback_error}")
             await event.edit(
-                "𝘌𝘳𝘳𝘰𝘳 𝘊𝘳𝘦𝘢𝘵𝘪𝘯𝘨 𝘌𝘴𝘤𝘳𝘰𝘸\n\n<blockquote>Technical issue detected</blockquote>",
-                parse_mode='html',
+                "𝘌𝘳𝘳𝘰𝘳 𝘊𝘳𝘦𝘢𝘵𝘪𝘯𝘨 𝘌𝘴𝘤𝘳𝘰𝘸\n\nTechnical issue detected",
                 buttons=[Button.inline("🔄 Try Again", b"create")]
             )
-
 async def handle_create_other(event):
     """
     Handle OTC deal selection
