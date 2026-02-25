@@ -46,24 +46,23 @@ def get_next_number(group_type="p2p"):
 
 from telethon.tl.types import MessageEntityCustomEmoji
 
+from telethon.tl.types import (
+    MessageEntityCustomEmoji,
+    MessageEntityBold
+)
+
 async def handle_create(event):
-    """
-    Handle create escrow button click with premium custom emojis
-    Safe dynamic UTF-16 offset calculation
-    """
     try:
         from utils.buttons import get_create_buttons
 
-        # IMPORTANT: No leading newline here
         text = (
             "𝘊𝘳𝘦𝘢𝘵𝘦 𝘕𝘦𝘸 𝘌𝘴𝘤𝘳𝘰𝘸 🔩\n\n"
-            "<blockquote>Select transaction type to proceed</blockquote>\n\n"
-            "• <b>P2P Deal 🥂</b> – Standard buyer/seller transactions\n"
-            "• <b>Other Deal ❤️</b> – Custom or multi-party agreements\n\n"
+            "Select transaction type to proceed\n\n"
+            "• P2P Deal 🥂 – Standard buyer/seller transactions\n"
+            "• Other Deal ❤️ – Custom or multi-party agreements\n\n"
             "All escrows operate within private, bot-moderated groups🔥."
         )
 
-        # Map emoji → custom emoji id
         emoji_map = {
             "🔩": 5260249805522744465,
             "🥂": 5260567255145539253,
@@ -73,13 +72,9 @@ async def handle_create(event):
 
         entities = []
 
-        # Convert to UTF-16 to calculate correct offsets
-        utf16_text = text.encode("utf-16-le")
-
+        # ---- CUSTOM EMOJIS ----
         for emoji, doc_id in emoji_map.items():
             index = text.index(emoji)
-
-            # Convert Python index → UTF-16 offset
             utf16_offset = len(text[:index].encode("utf-16-le")) // 2
             utf16_length = len(emoji.encode("utf-16-le")) // 2
 
@@ -91,11 +86,25 @@ async def handle_create(event):
                 )
             )
 
+        # ---- BOLD TEXT ----
+        bold_phrases = ["P2P Deal", "Other Deal"]
+
+        for phrase in bold_phrases:
+            index = text.index(phrase)
+            utf16_offset = len(text[:index].encode("utf-16-le")) // 2
+            utf16_length = len(phrase.encode("utf-16-le")) // 2
+
+            entities.append(
+                MessageEntityBold(
+                    offset=utf16_offset,
+                    length=utf16_length
+                )
+            )
+
         await event.edit(
             text,
             buttons=get_create_buttons(),
-            parse_mode="html",
-            formatting_entities=entities  # your Telethon version needs this
+            formatting_entities=entities  # NO parse_mode
         )
 
     except Exception as e:
