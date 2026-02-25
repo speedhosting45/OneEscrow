@@ -29,7 +29,7 @@ from handlers.addresses import setup_address_handlers
 
 # Import utilities
 from utils.texts import (
-    _MESSAGE, CREATE_MESSAGE, P2P_CREATED_MESSAGE, OTHER_CREATED_MESSAGE,
+    START_MESSAGE, CREATE_MESSAGE, P2P_CREATED_MESSAGE, OTHER_CREATED_MESSAGE,
     WELCOME_MESSAGE, SESSION_INITIATED_MESSAGE, INSUFFICIENT_MEMBERS_MESSAGE,
     SESSION_ALREADY_INITIATED_MESSAGE, GROUP_NOT_FOUND_MESSAGE,
     MERGED_PHOTO_CAPTION, PARTICIPANTS_CONFIRMED_MESSAGE, JOIN_MESSAGE,
@@ -1088,84 +1088,69 @@ class EscrowBot:
 
     async def start_bot(self):
         """Start the bot"""
-    try:
-        # Check config
-        if not API_ID or not API_HASH or not BOT_TOKEN:
-            logger.error("Missing configuration")
-            sys.exit(1)
-        
-        # Check assets (silently)
-        self.check_assets()
-        
-        # Start client
-        await self.client.start(bot_token=BOT_TOKEN)
-        
-        # Get bot info
-        me = await self.client.get_me()
-        
-        # Clean, spaced out startup messages
-        await asyncio.sleep(0.5)
-        logger.success(f"Bot @{me.username} successfully hosted")
-        
-        await asyncio.sleep(0.3)
-        # Get VPS info if available
         try:
-            import psutil
-            ram = psutil.virtual_memory().total / (1024**3)  # GB
-            cpu_count = psutil.cpu_count()
-            logger.info(f"VPS found - RAM: {ram:.1f}GB | CPU Cores: {cpu_count}")
-        except:
-            pass
-        
-        await asyncio.sleep(0.3)
-        logger.info("Bot is ready")
-        logger.info("Press Ctrl+C to stop")
-        
-        # Run
-        await self.client.run_until_disconnected()
-        
-    except KeyboardInterrupt:
-        logger.info("Bot stopped")
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        logger.info("Shutdown complete")
+            # Check config
+            if not API_ID or not API_HASH or not BOT_TOKEN:
+                logger.error("Missing configuration")
+                sys.exit(1)
+            
+            # Check assets (silently)
+            self.check_assets()
+            
+            # Start client
+            await self.client.start(bot_token=BOT_TOKEN)
+            
+            # Get bot info
+            me = await self.client.get_me()
+            
+            # Clean, spaced out startup messages
+            await asyncio.sleep(0.5)
+            logger.success(f"Bot @{me.username} successfully hosted")
+            
+            await asyncio.sleep(0.3)
+            # Get VPS info if available
+            try:
+                import psutil
+                ram = psutil.virtual_memory().total / (1024**3)  # GB
+                cpu_count = psutil.cpu_count()
+                logger.info(f"VPS found - RAM: {ram:.1f}GB | CPU Cores: {cpu_count}")
+            except ImportError:
+                pass
+            except Exception as e:
+                pass
+            
+            await asyncio.sleep(0.3)
+            logger.info("Bot is ready")
+            logger.info("Press Ctrl+C to stop")
+            
+            # Run
+            await self.client.run_until_disconnected()
+            
+        except KeyboardInterrupt:
+            logger.info("Bot stopped")
+        except Exception as e:
+            logger.error(f"Error: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            logger.info("Shutdown complete")
     
     def check_assets(self):
         """Check if required assets exist"""
-        logger.info("Checking assets...")
-        
         # Create necessary directories
         os.makedirs('assets', exist_ok=True)
         os.makedirs('config', exist_ok=True)
         os.makedirs('data', exist_ok=True)
         
-        # Check required assets
+        # Check required assets (silent)
         required_assets = [BASE_START_IMAGE, PFP_TEMPLATE, UNKNOWN_PFP]
         
         for asset in required_assets:
             if not os.path.exists(asset):
-                logger.error(f"REQUIRED asset missing: {asset}")
                 if asset == UNKNOWN_PFP:
-                    logger.info("Creating unknown.png fallback...")
                     # Create a simple unknown.png
                     img = create_default_fallback()
                     img.save(UNKNOWN_PFP)
-                    logger.info(f"Created {UNKNOWN_PFP}")
-                elif asset == BASE_START_IMAGE:
-                    logger.info(f"Please add {BASE_START_IMAGE} for /begin preview")
-                elif asset == PFP_TEMPLATE:
-                    logger.info(f"Please add {PFP_TEMPLATE} for final PFP logo")
-        
-        # Check font
-        font_path = "assets/Skynight.otf"
-        if not os.path.exists(font_path):
-            logger.warning(f"Font file missing: {font_path}")
-            logger.info("PFP logos will use default font")
-        
-        logger.info("Asset check complete\n")
 
 async def main_async():
     """Async main function"""
