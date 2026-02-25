@@ -51,6 +51,12 @@ from telethon.tl.types import (
     MessageEntityBold
 )
 
+from telethon.tl.types import (
+    MessageEntityCustomEmoji,
+    MessageEntityBold,
+    MessageEntityBlockquote
+)
+
 async def handle_create(event):
     try:
         from utils.buttons import get_create_buttons
@@ -72,7 +78,7 @@ async def handle_create(event):
 
         entities = []
 
-        # ---- CUSTOM EMOJIS ----
+        # ---- PREMIUM EMOJIS ----
         for emoji, doc_id in emoji_map.items():
             index = text.index(emoji)
             utf16_offset = len(text[:index].encode("utf-16-le")) // 2
@@ -86,7 +92,7 @@ async def handle_create(event):
                 )
             )
 
-        # ---- BOLD TEXT ----
+        # ---- BOLD ----
         bold_phrases = ["P2P Deal", "Other Deal"]
 
         for phrase in bold_phrases:
@@ -101,10 +107,23 @@ async def handle_create(event):
                 )
             )
 
+        # ---- BLOCKQUOTE ----
+        quote_text = "Select transaction type to proceed"
+        index = text.index(quote_text)
+        utf16_offset = len(text[:index].encode("utf-16-le")) // 2
+        utf16_length = len(quote_text.encode("utf-16-le")) // 2
+
+        entities.append(
+            MessageEntityBlockquote(
+                offset=utf16_offset,
+                length=utf16_length
+            )
+        )
+
         await event.edit(
             text,
             buttons=get_create_buttons(),
-            formatting_entities=entities  # NO parse_mode
+            formatting_entities=entities
         )
 
     except Exception as e:
