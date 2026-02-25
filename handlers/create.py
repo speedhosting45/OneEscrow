@@ -143,7 +143,7 @@ async def handle_create(event):
 
 async def handle_create_p2p(event):
     """
-    Handle P2P deal selection
+    Handle P2P deal selection with premium custom emojis
     """
     try:
         # Get user mention
@@ -180,26 +180,144 @@ async def handle_create_p2p(event):
         result = await create_escrow_group(group_name, bot_username, "p2p", event.client, user.id)
         
         if result and "invite_url" in result:
-            from utils.texts import P2P_CREATED_MESSAGE
             from utils.buttons import get_p2p_created_buttons
+            from telethon.helpers import add_surrogate
+            from telethon.tl.types import (
+                MessageEntityCustomEmoji,
+                MessageEntityBold,
+                MessageEntityBlockquote,
+                MessageEntityCode,
+                MessageEntityUrl
+            )
             
             # Get buttons
             buttons = get_p2p_created_buttons(result["invite_url"])
             
-            # Create message
-            message = P2P_CREATED_MESSAGE.format(
-                GROUP_NUMBER=group_number,
-                GROUP_INVITE_LINK=result["invite_url"],
-                GROUP_NAME=group_name,
-                P2P_IMAGE=P2P_IMAGE
+            # The message text with placeholders
+            raw_text = f"""
+𝘗2𝘗 𝘌𝘴𝘤𝘳𝘰𝘸 𝘌𝘴𝘵𝘢𝘣𝘭𝘪𝘴𝘩𝘦𝘥 💵
+
+<blockquote>Secure transaction group created 🚀</blockquote>
+
+<b>Group:</b> {group_name} 
+<b>Type:</b> P2P Transaction 🎈
+<b>Status:</b> Ready for configuration 
+
+<code>{result["invite_url"]}</code>
+
+Proceed to the group to configure participants and terms ⚖️<a href="{P2P_IMAGE}">.</a>
+"""
+            
+            # Convert to UTF-16 safe string
+            text = add_surrogate(raw_text)
+            
+            # Custom emoji IDs mapping
+            emoji_map = {
+                "💵": 5409048419211682843,   # offset 68
+                "🚀": 5258332798409783582,    # offset 117
+                "🎈": 5278651867780377852,    # offset 190
+                "⚖️": 5400250414929041085,    # offset 325
+            }
+            
+            entities = []
+            
+            # ---- PREMIUM EMOJIS ----
+            # 💵 at offset 68
+            entities.append(
+                MessageEntityCustomEmoji(
+                    offset=68,
+                    length=2,
+                    document_id=emoji_map["💵"]
+                )
             )
             
-            # Send final message
+            # 🚀 at offset 117
+            entities.append(
+                MessageEntityCustomEmoji(
+                    offset=117,
+                    length=2,
+                    document_id=emoji_map["🚀"]
+                )
+            )
+            
+            # 🎈 at offset 190
+            entities.append(
+                MessageEntityCustomEmoji(
+                    offset=190,
+                    length=2,
+                    document_id=emoji_map["🎈"]
+                )
+            )
+            
+            # ⚖️ at offset 325
+            entities.append(
+                MessageEntityCustomEmoji(
+                    offset=325,
+                    length=2,
+                    document_id=emoji_map["⚖️"]
+                )
+            )
+            
+            # ---- URL ENTITY ----
+            # The hidden image link at offset 336, length 35
+            entities.append(
+                MessageEntityUrl(
+                    offset=336,
+                    length=35
+                )
+            )
+            
+            # ---- BOLD ENTITIES ----
+            # Find positions for bold text
+            bold_phrases = [
+                ("Group:", raw_text.index("Group:")),
+                ("Type:", raw_text.index("Type:")),
+                ("Status:", raw_text.index("Status:"))
+            ]
+            
+            for phrase, idx in bold_phrases:
+                utf16_offset = len(raw_text[:idx].encode("utf-16-le")) // 2
+                utf16_length = len(phrase.encode("utf-16-le")) // 2
+                entities.append(
+                    MessageEntityBold(
+                        offset=utf16_offset,
+                        length=utf16_length
+                    )
+                )
+            
+            # ---- BLOCKQUOTE ENTITY ----
+            quote_text = "Secure transaction group created 🚀"
+            quote_idx = raw_text.index(quote_text)
+            utf16_offset = len(raw_text[:quote_idx].encode("utf-16-le")) // 2
+            utf16_length = len(quote_text.encode("utf-16-le")) // 2
+            entities.append(
+                MessageEntityBlockquote(
+                    offset=utf16_offset,
+                    length=utf16_length
+                )
+            )
+            
+            # ---- CODE ENTITY ----
+            # The invite link
+            code_idx = raw_text.index(result["invite_url"])
+            utf16_offset = len(raw_text[:code_idx].encode("utf-16-le")) // 2
+            utf16_length = len(result["invite_url"].encode("utf-16-le")) // 2
+            entities.append(
+                MessageEntityCode(
+                    offset=utf16_offset,
+                    length=utf16_length
+                )
+            )
+            
+            # Sort entities by offset to ensure proper order
+            entities.sort(key=lambda e: e.offset)
+            
+            # Send final message with all entities
             await event.edit(
-                message,
-                parse_mode='html',
-                link_preview=True,
-                buttons=buttons
+                text,
+                buttons=buttons,
+                formatting_entities=entities,
+                link_preview=True
             )
             
             print(f"[SUCCESS] P2P Escrow created: {group_name}")
@@ -215,91 +333,37 @@ async def handle_create_p2p(event):
         print(f"[ERROR] P2P handler: {e}")
         import traceback
         traceback.print_exc()
-        await event.edit(
-            "𝘌𝘳𝘳𝘰𝘳 𝘊𝘳𝘦𝘢𝘵𝘪𝘯𝘨 𝘌𝘴𝘤𝘳𝘰𝘸\n\n<blockquote>Technical issue detected</blockquote>",
-            parse_mode='html',
-            buttons=[Button.inline("🔄 Try Again", b"create")]
-        )
-
-async def handle_create_other(event):
-    """
-    Handle OTC deal selection
-    """
-    try:
-        # Get user mention
-        user = await event.get_sender()
-        mention = user.first_name
-        if user.username:
-            mention = f"@{user.username}"
-        
-        # Get bot info
-        bot = await event.client.get_me()
-        bot_username = bot.username
-        set_bot_username(bot_username)
-        
-        # Get group number
-        group_number = get_next_number("other")
-        group_name = f"𝖮𝖳𝖢 𝘌𝘴𝘤𝘳𝘰𝘸 𝘚𝘦𝘴𝘴𝘪𝘰𝘯 • #{group_number:02d}"
-        
-        # Show animation messages
-        animation_messages = [
-            f"𝘊𝘳𝘦𝘢𝘵𝘪𝘯𝘨 𝘖𝘛𝘊 𝘌𝘴𝘤𝘳𝘰𝘸\n\n<blockquote>Please wait {mention}.</blockquote>",
-            f"𝘊𝘳𝘦𝘢𝘵𝘪𝘯𝘨 𝘖𝘛𝘊 𝘌𝘴𝘤𝘳𝘰𝘸\n\n<blockquote>Please wait {mention}..</blockquote>",
-            f"𝘊𝘳𝘦𝘢𝘵𝘪𝘯𝘨 𝘖𝘛𝘊 𝘌𝘴𝘤𝘳𝘰𝘸\n\n<blockquote>Please wait {mention}...</blockquote>",
-        ]
-        
-        # Display animation
-        for msg in animation_messages:
+        # Fallback to regular message without custom emojis
+        try:
+            from utils.texts import P2P_CREATED_MESSAGE
+            from utils.buttons import get_p2p_created_buttons
+            
+            result = await create_escrow_group(group_name, bot_username, "p2p", event.client, user.id)
+            if result and "invite_url" in result:
+                message = P2P_CREATED_MESSAGE.format(
+                    GROUP_NUMBER=group_number,
+                    GROUP_INVITE_LINK=result["invite_url"],
+                    GROUP_NAME=group_name,
+                    P2P_IMAGE=P2P_IMAGE
+                )
+                await event.edit(
+                    message,
+                    parse_mode='html',
+                    link_preview=True,
+                    buttons=get_p2p_created_buttons(result["invite_url"])
+                )
+            else:
+                await event.edit(
+                    "𝘌𝘴𝘤𝘳𝘰𝘸 𝘊𝘳𝘦𝘢𝘵𝘪𝘰𝘯 𝘍𝘢𝘪𝘭𝘦𝘥\n\n<blockquote>Please try again later</blockquote>",
+                    parse_mode='html',
+                    buttons=[Button.inline("🔄 Try Again", b"create")]
+                )
+        except:
             await event.edit(
-                msg,
-                parse_mode='html'
-            )
-            await asyncio.sleep(0.5)
-        
-        # Create group
-        result = await create_escrow_group(group_name, bot_username, "other", event.client, user.id)
-        
-        if result and "invite_url" in result:
-            from utils.texts import OTHER_CREATED_MESSAGE
-            from utils.buttons import get_otc_created_buttons
-            
-            # Get buttons
-            buttons = get_otc_created_buttons(result["invite_url"])
-            
-            # Create message
-            message = OTHER_CREATED_MESSAGE.format(
-                GROUP_NUMBER=group_number,
-                GROUP_INVITE_LINK=result["invite_url"],
-                GROUP_NAME=group_name,
-                OTC_IMAGE=OTC_IMAGE
-            )
-            
-            # Send final message
-            await event.edit(
-                message,
-                parse_mode='html',
-                link_preview=True,
-                buttons=buttons
-            )
-            
-            print(f"[SUCCESS] OTC Escrow created: {group_name}")
-            
-        else:
-            await event.edit(
-                "𝘌𝘴𝘤𝘳𝘰𝘸 𝘊𝘳𝘦𝘢𝘵𝘪𝘰𝘯 𝘍𝘢𝘪𝘭𝘦𝘥\n\n<blockquote>Please try again later</blockquote>",
+                "𝘌𝘳𝘳𝘰𝘳 𝘊𝘳𝘦𝘢𝘵𝘪𝘯𝘨 𝘌𝘴𝘤𝘳𝘰𝘸\n\n<blockquote>Technical issue detected</blockquote>",
                 parse_mode='html',
                 buttons=[Button.inline("🔄 Try Again", b"create")]
             )
-            
-    except Exception as e:
-        print(f"[ERROR] OTC handler: {e}")
-        import traceback
-        traceback.print_exc()
-        await event.edit(
-            "𝘌𝘳𝘳𝘰𝘳 𝘊𝘳𝘦𝘢𝘵𝘪𝘯𝘨 𝘌𝘴𝘤𝘳𝘰𝘸\n\n<blockquote>Technical issue detected</blockquote>",
-            parse_mode='html',
-            buttons=[Button.inline("🔄 Try Again", b"create")]
-        )
 
 async def create_escrow_group(group_name, bot_username, group_type, bot_client, creator_user_id):
     """
