@@ -686,7 +686,7 @@ async def create_escrow_group(group_name, bot_username, group_type, bot_client, 
             print("[INFO] User client disconnected")
 
 async def send_log_to_channel_bot(bot_client, group_name, group_type, creator, chat_id, invite_url, creator_user_id, mention):
-    """Send creation log to channel using BOT (not session string) with premium emojis"""
+    """Send creation log to channel using BOT with premium emojis"""
     try:
         # Format the log message exactly as requested
         group_type_display = "#𝗉2𝗉" if group_type == "p2p" else "#𝗈𝗍𝖼"
@@ -704,10 +704,38 @@ Link : {invite_url}
 𝖢𝗋𝖾𝖺𝗍𝖾𝖽 𝖡𝗒 : {mention} 🟢
 𝖴𝗌𝖾𝗋 𝖨𝖣 : {creator_user_id} ➖"""
 
-        # Build entities for log message with DYNAMIC offsets
+        print(f"[DEBUG] Log text:\n{log_text}")
+
+        # Build entities with dynamic offsets
         entities = []
         
-        # 1. Hashtag entity for first line
+        # Find positions of each emoji and calculate UTF-16 offsets
+        emoji_positions = [
+            ("💸", 6082586710988820084),
+            ("🔗", 5271604874419647061),
+            ("🥂", 5260567255145539253),
+            ("🟢", 6298751564592973547),
+            ("➖", 6024110293167116639)
+        ]
+        
+        for emoji, doc_id in emoji_positions:
+            idx = log_text.find(emoji)
+            if idx != -1:
+                # Calculate UTF-16 offset
+                prefix = log_text[:idx]
+                utf16_offset = len(prefix.encode('utf-16-le')) // 2
+                utf16_length = len(emoji.encode('utf-16-le')) // 2
+                
+                entities.append(
+                    MessageEntityCustomEmoji(
+                        offset=utf16_offset,
+                        length=utf16_length,
+                        document_id=doc_id
+                    )
+                )
+                print(f"[DEBUG] {emoji} at character {idx}, UTF-16 offset {utf16_offset}")
+        
+        # Add hashtag entity
         hashtag_text = "#𝖭𝖾𝗐 𝖤𝗌𝖼𝗋𝗈𝗐 𝖦𝗋𝗈𝗎𝗉 𝖢𝗋𝖾𝖺𝗍𝖾𝖽 & 𝖲𝖺𝗏𝖾𝖽."
         idx = log_text.find(hashtag_text)
         if idx != -1:
@@ -715,105 +743,37 @@ Link : {invite_url}
             utf16_offset = len(prefix.encode('utf-16-le')) // 2
             utf16_length = len(hashtag_text.encode('utf-16-le')) // 2
             entities.append(MessageEntityHashtag(offset=utf16_offset, length=utf16_length))
-            print(f"[DEBUG] Hashtag at offset {utf16_offset}, length {utf16_length}")
-        
-        # 2. Custom emoji for 💸 (after Deal Type)
-        idx = log_text.find("💸")
-        if idx != -1:
-            prefix = log_text[:idx]
-            utf16_offset = len(prefix.encode('utf-16-le')) // 2
-            utf16_length = len("💸".encode('utf-16-le')) // 2
-            entities.append(MessageEntityCustomEmoji(
-                offset=utf16_offset,
-                length=utf16_length,
-                document_id=6082586710988820084
-            ))
-            print(f"[DEBUG] 💸 at offset {utf16_offset}")
-        
-        # 3. Custom emoji for 🔗 (after Name)
-        idx = log_text.find("🔗")
-        if idx != -1:
-            prefix = log_text[:idx]
-            utf16_offset = len(prefix.encode('utf-16-le')) // 2
-            utf16_length = len("🔗".encode('utf-16-le')) // 2
-            entities.append(MessageEntityCustomEmoji(
-                offset=utf16_offset,
-                length=utf16_length,
-                document_id=5271604874419647061
-            ))
-            print(f"[DEBUG] 🔗 at offset {utf16_offset}")
-        
-        # 4. Custom emoji for 🥂 (after Chat ID)
-        idx = log_text.find("🥂")
-        if idx != -1:
-            prefix = log_text[:idx]
-            utf16_offset = len(prefix.encode('utf-16-le')) // 2
-            utf16_length = len("🥂".encode('utf-16-le')) // 2
-            entities.append(MessageEntityCustomEmoji(
-                offset=utf16_offset,
-                length=utf16_length,
-                document_id=5260567255145539253
-            ))
-            print(f"[DEBUG] 🥂 at offset {utf16_offset}")
-        
-        # 5. Custom emoji for 🟢 (after Created By)
-        idx = log_text.find("🟢")
-        if idx != -1:
-            prefix = log_text[:idx]
-            utf16_offset = len(prefix.encode('utf-16-le')) // 2
-            utf16_length = len("🟢".encode('utf-16-le')) // 2
-            entities.append(MessageEntityCustomEmoji(
-                offset=utf16_offset,
-                length=utf16_length,
-                document_id=6298751564592973547
-            ))
-            print(f"[DEBUG] 🟢 at offset {utf16_offset}")
-        
-        # 6. Custom emoji for ➖ (after User ID)
-        idx = log_text.find("➖")
-        if idx != -1:
-            prefix = log_text[:idx]
-            utf16_offset = len(prefix.encode('utf-16-le')) // 2
-            utf16_length = len("➖".encode('utf-16-le')) // 2
-            entities.append(MessageEntityCustomEmoji(
-                offset=utf16_offset,
-                length=utf16_length,
-                document_id=6024110293167116639
-            ))
-            print(f"[DEBUG] ➖ at offset {utf16_offset}")
+            print(f"[DEBUG] Hashtag at offset {utf16_offset}")
         
         # Sort entities by offset
         entities.sort(key=lambda e: e.offset)
         
-        print(f"[DEBUG] Total entities created: {len(entities)}")
+        print(f"[DEBUG] Total entities: {len(entities)}")
         
-        # Send to log channel using the BOT client
+        # Try sending with entities
         try:
             await bot_client.send_message(
                 LOG_CHANNEL_ID,
                 log_text,
                 formatting_entities=entities
             )
-            print(f"[SUCCESS] Log sent to channel with {len(entities)} premium emojis")
-            
+            print(f"[SUCCESS] Log sent with custom emoji entities")
+            return
         except Exception as e:
-            print(f"[ERROR] Bot failed to send log with entities: {e}")
-            
-            # Fallback: try to send without entities
-            try:
-                await bot_client.send_message(
-                    LOG_CHANNEL_ID,
-                    log_text
-                )
-                print(f"[LOG] Sent to channel using BOT (plain text)")
-            except Exception as e2:
-                print(f"[ERROR] Bot fallback also failed: {e2}")
+            print(f"[ERROR] Entity method failed: {e}")
+        
+        # Fallback to HTML
+        await bot_client.send_message(
+            LOG_CHANNEL_ID,
+            log_text,
+            parse_mode='html'
+        )
+        print(f"[SUCCESS] Log sent with HTML fallback")
         
     except Exception as e:
-        print(f"[ERROR] Preparing log: {e}")
+        print(f"[ERROR] in send_log_to_channel_bot: {e}")
         import traceback
         traceback.print_exc()
-
 def store_group_data(group_id, group_name, group_type, creator_id, bot_username, creator_username, creator_user_id):
     """Store group data"""
     try:
