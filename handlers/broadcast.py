@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 import asyncio
 import time
 import os
+import tempfile
+import shutil
 
 logger = get_logger("Trisha.core.broadcast")
 
@@ -49,23 +51,17 @@ async def get_all_users():
         logger.error(f"Error getting users from DB: {e}")
         return []
 
-async def send_broadcast_message(client, user_id, message, file=None, file_name=None, buttons=None):
+async def send_broadcast_message(client, user_id, message, file_path=None, buttons=None):
     """Send broadcast message to a single user"""
     try:
-        if file:
-            # If it's an image, ensure it has .png extension
-            if file_name and not file_name.endswith(('.png', '.jpg', '.jpeg', '.gif')):
-                file_name = f"{file_name}.png"
-            elif not file_name:
-                file_name = "broadcast_image.png"
-                
+        if file_path and os.path.exists(file_path):
+            # Send with the actual file path - Telegram will preserve filename
             await client.send_file(
                 user_id, 
-                file, 
+                file_path, 
                 caption=message, 
                 parse_mode='html', 
-                buttons=buttons,
-                file_name=file_name
+                buttons=buttons
             )
         else:
             await client.send_message(user_id, message, parse_mode='html', buttons=buttons)
@@ -190,13 +186,13 @@ async def log_broadcast_result_to_channel(client, completion_text, total_users, 
         elapsed = time.time() - start_time
         elapsed_str = format_time_taken(elapsed)
         
-        # Format the log message exactly like the completion message
+        # Format the log message exactly like the completion message with premium emoji
         log_text = f"Broadcast Completed. ✌️\nSuccessfully Broadcasted To {success_count} users. And Failed To Broadcast {failed_count} users. 📰\nTime Taken : {elapsed_str}"
         
-        # Map emojis for log message
+        # Map emojis for log message (premium emojis)
         log_emoji_map = {
-            "✌️": 5273802055134229167,
-            "📰": 5257952710983955418
+            "✌️": 5273802055134229167,  # Premium ✌️ emoji
+            "📰": 5257952710983955418     # Premium 📰 emoji
         }
         
         # Define bold ranges (character indices)
@@ -221,7 +217,7 @@ async def log_broadcast_result_to_channel(client, completion_text, total_users, 
             formatting_entities=log_entities
         )
         
-        logger.info(f"Broadcast result logged to channel")
+        logger.info(f"Broadcast result logged to channel with premium emojis")
     except Exception as e:
         logger.error(f"Error logging broadcast result to channel: {e}")
 
@@ -231,6 +227,7 @@ async def handle_broadcast(event):
     Handle /broadcast command - Only owner can use
     Usage: /broadcast <message> or reply to a message with /broadcast
     """
+    temp_files = []  # Track temporary files for cleanup
     try:
         # Owner check at the very top
         if event.sender_id != OWNER_ID:
@@ -250,27 +247,28 @@ async def handle_broadcast(event):
         
         # Get broadcast content
         message_text = None
-        file = None
-        file_name = None
+        file_path = None
         
         if event.is_reply:
             # If replying to a message, get that message's content
             replied = await event.get_reply_message()
             message_text = replied.text or replied.message or ""
+            
+            # Download media to file (not bytes) to preserve filename
             if replied.media:
-                file = await replied.download_media(file=bytes)
-                # Set proper filename for image
-                if replied.file and replied.file.name:
-                    file_name = replied.file.name
-                else:
-                    # Generate filename based on media type
-                    if replied.photo:
-                        file_name = f"broadcast_image_{int(time.time())}.png"
-                    elif replied.document:
-                        file_name = replied.document.attributes[0].file_name if replied.document.attributes else f"broadcast_file_{int(time.time())}"
-                    else:
-                        file_name = f"broadcast_media_{int(time.time())}"
-                logger.info(f"Broadcasting media file as: {file_name}")
+                # Create temp directory if it doesn't exist
+                os.makedirs('temp_broadcast', exist_ok=True)
+                
+                # Download with original filename
+                file_path = await replied.download_media(file='temp_broadcast/')
+                
+                if file_path:
+                    temp_files.append(file_path)
+                    logger.info(f"Media saved to: {file_path}")
+                    
+                    # Log file info
+                    file_size = os.path.getsize(file_path) / 1024  # KB
+                    logger.info(f"Broadcasting media file: {os.path.basename(file_path)} ({file_size:.2f} KB)")
         else:
             # Get text from command
             message_text = event.message.text.replace('/broadcast', '', 1).strip()
@@ -312,8 +310,7 @@ async def handle_broadcast(event):
                     event.client, 
                     user_id, 
                     message_text, 
-                    file,
-                    file_name
+                    file_path
                 )
                 
                 if success:
@@ -354,10 +351,10 @@ async def handle_broadcast(event):
         # Completion message with bold formatting
         completion_text = f"Broadcast Completed. ✌️\nSuccessfully Broadcasted To {success_count} users. And Failed To Broadcast {failed_count} users. 📰\nTime Taken : {time_taken}"
         
-        # Map emojis for completion message
+        # Map emojis for completion message (premium emojis)
         completion_emoji_map = {
-            "✌️": 5273802055134229167,
-            "📰": 5257952710983955418
+            "✌️": 5273802055134229167,  # Premium ✌️ emoji
+            "📰": 5257952710983955418     # Premium 📰 emoji
         }
         
         # Define bold ranges (character indices)
@@ -378,7 +375,7 @@ async def handle_broadcast(event):
         # Send completion message (reply to the original command)
         await event.reply(completion_text, formatting_entities=completion_entities)
         
-        # Log the same message to the channel
+        # Log the same message to the channel with premium emojis
         await log_broadcast_result_to_channel(
             event.client, completion_text, total_users,
             success_count, failed_count, start_time
@@ -389,3 +386,20 @@ async def handle_broadcast(event):
     except Exception as e:
         logger.error(f"Error in broadcast handler: {e}")
         await event.reply(f"❌ Error during broadcast: {str(e)[:100]}")
+    
+    finally:
+        # Clean up temporary files
+        for temp_file in temp_files:
+            try:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                    logger.info(f"Cleaned up temp file: {temp_file}")
+            except Exception as e:
+                logger.error(f"Error cleaning up {temp_file}: {e}")
+        
+        # Clean up temp directory if empty
+        try:
+            if os.path.exists('temp_broadcast') and not os.listdir('temp_broadcast'):
+                os.rmdir('temp_broadcast')
+        except:
+            pass
