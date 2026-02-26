@@ -36,12 +36,13 @@ async def get_all_users():
             logger.error("Database connection failed")
             return []
         
-        users_collection = db["OneEscrowUsers"]  # Using OneEscrowUsers collection
+        # Using "users" collection to match start.py
+        users_collection = db["users"]
         cursor = users_collection.find({}, {"user_id": 1})
         users = await cursor.to_list(length=None)
         user_ids = [user["user_id"] for user in users]
         
-        logger.info(f"Loaded {len(user_ids)} users from OneEscrowUsers collection")
+        logger.info(f"Loaded {len(user_ids)} users from users collection")
         return user_ids
     except Exception as e:
         logger.error(f"Error getting users from DB: {e}")
@@ -165,11 +166,11 @@ async def handle_broadcast(event):
             return
         
         # Get all users from database
-        logger.info("Fetching users from OneEscrowUsers collection...")
+        logger.info("Fetching users from users collection...")
         users = await get_all_users()
         
         if not users:
-            await event.respond("❌ No users found in OneEscrowUsers collection.")
+            await event.respond("❌ No users found in database.")
             return
         
         total_users = len(users)
