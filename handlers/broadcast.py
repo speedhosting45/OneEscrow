@@ -1,5 +1,5 @@
 from telethon import events
-from telethon.tl.types import MessageEntityCustomEmoji
+from telethon.tl.types import MessageEntityCustomEmoji, MessageEntityBold
 from config import OWNER_ID, LOG_CHANNEL_ID, BOT_USERNAME, MONGO_URI, DB_NAME
 from core.logger import get_logger
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -89,54 +89,59 @@ def format_time_taken(seconds):
         hours = seconds / 3600
         return f"{hours:.1f} hours"
 
-def build_custom_emoji_entities(text, emoji_map):
+def build_custom_entities(text, emoji_map=None, bold_ranges=None):
     """
-    Dynamically build custom emoji entities with correct UTF-16 offsets
+    Dynamically build custom emoji and bold entities with correct UTF-16 offsets
     
     Args:
         text: Full message string
         emoji_map: Dictionary mapping emoji characters to document_ids
-                  e.g. {"🚀": 5258332798409783582, "🔥": 6026036220927151662}
+        bold_ranges: List of tuples (start_idx, length) for bold text (character indices)
     
     Returns:
-        List of MessageEntityCustomEmoji with correct offsets
+        List of MessageEntity objects with correct offsets
     """
     entities = []
     
-    for emoji, doc_id in emoji_map.items():
-        start = 0
-        while True:
-            try:
-                # Find next occurrence of the emoji
-                index = text.index(emoji, start)
-                
-                # Calculate UTF-16 offset (Telethon requires UTF-16 positions)
-                prefix = text[:index]
-                utf16_offset = len(prefix.encode('utf-16-le')) // 2
-                
-                # Calculate UTF-16 length of the emoji
-                utf16_length = len(emoji.encode('utf-16-le')) // 2
-                
-                # Create the entity
-                entities.append(
-                    MessageEntityCustomEmoji(
-                        offset=utf16_offset,
-                        length=utf16_length,
-                        document_id=doc_id
-                    )
-                )
-                
-                # Move start position for next search
-                start = index + len(emoji)
-                
-            except ValueError:
-                # No more occurrences found
-                break
+    # Add bold entities
+    if bold_ranges:
+        for start_char, length_char in bold_ranges:
+            # Convert character offsets to UTF-16 offsets
+            prefix = text[:start_char]
+            utf16_offset = len(prefix.encode('utf-16-le')) // 2
+            utf16_length = len(text[start_char:start_char+length_char].encode('utf-16-le')) // 2
+            entities.append(MessageEntityBold(offset=utf16_offset, length=utf16_length))
     
-    # Sort entities by offset to maintain correct order
+    # Add custom emoji entities
+    if emoji_map:
+        for emoji, doc_id in emoji_map.items():
+            start = 0
+            while True:
+                try:
+                    index = text.index(emoji, start)
+                    
+                    # Calculate UTF-16 offset
+                    prefix = text[:index]
+                    utf16_offset = len(prefix.encode('utf-16-le')) // 2
+                    utf16_length = len(emoji.encode('utf-16-le')) // 2
+                    
+                    entities.append(
+                        MessageEntityCustomEmoji(
+                            offset=utf16_offset,
+                            length=utf16_length,
+                            document_id=doc_id
+                        )
+                    )
+                    
+                    start = index + len(emoji)
+                    
+                except ValueError:
+                    break
+    
+    # Sort entities by offset
     return sorted(entities, key=lambda e: e.offset)
 
-async def update_broadcast_status(event, message, broadcast_msg, start_time, total_users, processed, success, failed):
+async def update_broadcast_status(event, broadcast_msg, start_time, total_users, processed, success, failed):
     """Update broadcast status message"""
     elapsed = time.time() - start_time
     if processed > 0:
@@ -146,7 +151,7 @@ async def update_broadcast_status(event, message, broadcast_msg, start_time, tot
     else:
         eta = "calculating..."
     
-    # Status text with emojis
+    # Status text
     status_text = f"🚀 » Started Broadcasting.... Once Its Done I will let you know about it.\n ➖  ETA : {eta} 🔥"
     
     # Map emojis to their document IDs
@@ -155,13 +160,13 @@ async def update_broadcast_status(event, message, broadcast_msg, start_time, tot
         "🔥": 6026036220927151662
     }
     
-    # Build entities dynamically
-    entities = build_custom_emoji_entities(status_text, emoji_map)
+    # No bold ranges needed for status
+    entities = build_custom_entities(status_text, emoji_map=emoji_map)
     
     try:
         await broadcast_msg.edit(status_text, formatting_entities=entities)
     except Exception as e:
-        logger.error(f"Failed to update status with custom emojis: {e}")
+        logger.error(f"Failed to update status: {e}")
         # Fallback to plain text
         await broadcast_msg.edit(f"Started Broadcasting... ETA: {eta}")
 
@@ -231,19 +236,19 @@ async def handle_broadcast(event):
                 await event.respond("❌ Please provide a message to broadcast or reply to a message.")
                 return
         
-        # Initial status text with emojis
+        # Initial status text
         start_text = "🚀 » Started Broadcasting.... Once Its Done I will let you know about it.\n ➖  ETA : calculating... 🔥"
         
-        # Map emojis to their document IDs
+        # Map emojis for start message
         start_emoji_map = {
             "🚀": 5258332798409783582,
             "🔥": 6026036220927151662
         }
         
-        # Build entities dynamically
-        start_entities = build_custom_emoji_entities(start_text, start_emoji_map)
+        # Build entities for start message (no bold needed)
+        start_entities = build_custom_entities(start_text, emoji_map=start_emoji_map)
         
-        # Send initial status with custom emojis
+        # Send initial status
         start_time = time.time()
         broadcast_msg = await event.respond(
             start_text,
@@ -274,10 +279,10 @@ async def handle_broadcast(event):
                 
                 processed += 1
                 
-                # Update status every 10 users or every 5 seconds
-                if processed % 10 == 0 or time.time() - start_time > 5:
+                # Update status every 10 users
+                if processed % 10 == 0:
                     await update_broadcast_status(
-                        event, message_text, broadcast_msg, start_time,
+                        event, broadcast_msg, start_time,
                         total_users, processed, success_count, failed_count
                     )
                 
@@ -289,22 +294,40 @@ async def handle_broadcast(event):
                 failed_count += 1
                 processed += 1
         
+        # Final status update
+        await update_broadcast_status(
+            event, broadcast_msg, start_time,
+            total_users, processed, success_count, failed_count
+        )
+        
         # Format time taken
         time_taken = format_time_taken(time.time() - start_time)
         
-        # Completion message with emojis
+        # Completion message with bold formatting
         completion_text = f"Broadcast Completed. ✌️\nSuccessfully Broadcasted To {success_count} users. And Failed To Broadcast {failed_count} users. 📰\nTime Taken : {time_taken}"
         
-        # Map emojis in completion message
+        # Map emojis for completion message
         completion_emoji_map = {
             "✌️": 5273802055134229167,
             "📰": 5257952710983955418
         }
         
-        # Build completion entities dynamically
-        completion_entities = build_custom_emoji_entities(completion_text, completion_emoji_map)
+        # Define bold ranges (character indices) - making the stats bold
+        bold_ranges = [
+            (completion_text.find(f"Broadcast Completed"), len("Broadcast Completed")),
+            (completion_text.find(f"Successfully Broadcasted To {success_count}"), len(f"Successfully Broadcasted To {success_count}")),
+            (completion_text.find(f"Failed To Broadcast {failed_count}"), len(f"Failed To Broadcast {failed_count}")),
+            (completion_text.find(f"Time Taken"), len("Time Taken"))
+        ]
         
-        # Send completion message with custom emojis
+        # Build completion entities with both emojis and bold
+        completion_entities = build_custom_entities(
+            completion_text, 
+            emoji_map=completion_emoji_map,
+            bold_ranges=bold_ranges
+        )
+        
+        # Send completion message
         await event.respond(completion_text, formatting_entities=completion_entities)
         
         # Log results to log channel
