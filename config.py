@@ -15,7 +15,7 @@ STRING_SESSION1 = os.getenv('STRING_SESSION1', '')
 # Bot username (will be set dynamically)
 BOT_USERNAME = ""
 MONGO_URI = "mongodb+srv://kyurebc:VsUsi43gwToAT3cR@cluster0.p50wsey.mongodb.net/?appName=Cluster0"
-
+DB_NAME = "OneEscrowUsers"
 LOG_CHANNEL_ID=-1003631543074
 
 # Add these to your config.py file
